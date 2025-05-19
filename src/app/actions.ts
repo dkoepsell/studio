@@ -11,6 +11,11 @@ import {
   type ProvideSummarizationFeedbackInput,
   type ProvideSummarizationFeedbackOutput,
 } from '@/ai/flows/provide-summarization-feedback';
+import {
+  provideAnnotationFeedback,
+  type ProvideAnnotationFeedbackInput,
+  type ProvideAnnotationFeedbackOutput,
+} from '@/ai/flows/provide-annotation-feedback';
 
 export async function getAiAnnotationGuideAction(
   input: GenerateAnnotationExamplesInput
@@ -31,5 +36,16 @@ export async function getAiSummaryFeedbackAction(
   } catch (error) {
     console.error("Error in getAiSummaryFeedbackAction:", error);
     throw new Error("Failed to generate AI summary feedback.");
+  }
+}
+
+export async function getAiAnnotationFeedbackAction(
+  input: ProvideAnnotationFeedbackInput
+): Promise<ProvideAnnotationFeedbackOutput> {
+  try {
+    return await provideAnnotationFeedback(input);
+  } catch (error) {
+    console.error("Error in getAiAnnotationFeedbackAction:", error);
+    throw new Error("Failed to generate AI feedback on annotations.");
   }
 }
