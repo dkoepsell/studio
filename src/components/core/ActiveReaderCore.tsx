@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Lightbulb, Edit3, MessageSquare, Sparkles, FileText, Trash2, Highlighter, StickyNote,
-  CheckCircle, AlertTriangle, MessageCircleQuestion, KeyRound, BookMarked, Link2, HelpCircle, Palette
+  CheckCircle, AlertTriangle, MessageCircleQuestion, KeyRound, BookMarked, Link2, HelpCircle, UploadCloud
 } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { getAiAnnotationGuideAction, getAiSummaryFeedbackAction, getAiAnnotationFeedbackAction } from '@/app/actions';
@@ -74,17 +74,55 @@ export default function ActiveReaderCore() {
   const [isLoadingAiAnnotationFeedback, setIsLoadingAiAnnotationFeedback] = useState<boolean>(false);
   
   const textDisplayRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
-  const handleTextPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const pastedText = event.clipboardData.getData('text');
-    setOriginalText(pastedText);
+  const resetAppStateForNewText = () => {
     setAnnotations([]);
     setSummaryText("");
     setAiAnnotationGuide(null);
     setAiSummaryFeedback(null);
     setAiAnnotationFeedback(null);
+    setCurrentSelection(null);
+    setShowAnnotationToolbar(false);
+    setEditingAnnotation(null);
+  };
+
+  const handleTextPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedText = event.clipboardData.getData('text');
+    setOriginalText(pastedText);
+    resetAppStateForNewText();
     toast({ title: "Text Pasted", description: "You can now start reading and annotating." });
+  };
+
+  const handleManualTextChange = (newText: string) => {
+    setOriginalText(newText);
+    resetAppStateForNewText();
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      if (file.type === "text/plain") {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const text = e.target?.result as string;
+          setOriginalText(text);
+          resetAppStateForNewText();
+          toast({ title: "File Loaded", description: `${file.name} has been loaded.` });
+        };
+        reader.onerror = () => {
+          toast({ title: "File Read Error", description: "Could not read the selected file.", variant: "destructive" });
+        };
+        reader.readAsText(file);
+      } else {
+        toast({ title: "Unsupported File Type", description: "Please upload a .txt file.", variant: "destructive" });
+      }
+      // Reset file input value to allow re-uploading the same file if needed
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
   };
   
   const handleTextSelection = () => {
@@ -230,7 +268,7 @@ export default function ActiveReaderCore() {
   };
 
   const renderTextWithAnnotations = () => {
-    if (!originalText) return <p className="text-muted-foreground">Paste your text above to begin.</p>;
+    if (!originalText) return <p className="text-muted-foreground">Paste your text or upload a .txt file to begin.</p>;
 
     let lastIndex = 0;
     const parts: (string | JSX.Element)[] = [];
@@ -292,7 +330,7 @@ export default function ActiveReaderCore() {
 
   const fetchAiGuide = async () => {
     if (!originalText) {
-      toast({ title: "No Text Provided", description: "Please paste some text first.", variant: "destructive" });
+      toast({ title: "No Text Provided", description: "Please paste or upload some text first.", variant: "destructive" });
       return;
     }
     setIsLoadingAiGuide(true);
@@ -328,7 +366,7 @@ export default function ActiveReaderCore() {
 
   const fetchAiAnnotationFeedback = async () => {
     if (!originalText) {
-      toast({ title: "No Text Provided", description: "Please paste some text first.", variant: "destructive" });
+      toast({ title: "No Text Provided", description: "Please paste or upload some text first.", variant: "destructive" });
       return;
     }
     if (annotations.length === 0) {
@@ -363,24 +401,35 @@ export default function ActiveReaderCore() {
             <CardTitle>Import Your Text</CardTitle>
           </div>
           <CardDescription>
-            Paste your text into the area below to begin.
+            Paste your text into the area below, or upload a .txt file.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <Textarea
             placeholder="Paste your text here..."
-            rows={8}
+            rows={6}
             value={originalText}
             onPaste={handleTextPaste}
-            onChange={(e) => {
-              setOriginalText(e.target.value);
-              setAnnotations([]); 
-              setSummaryText("");
-              setAiAnnotationGuide(null);
-              setAiSummaryFeedback(null);
-              setAiAnnotationFeedback(null);
-            }}
+            onChange={(e) => handleManualTextChange(e.target.value)}
             className="text-base"
+          />
+          <div className="flex items-center justify-center">
+            <span className="text-sm text-muted-foreground">OR</span>
+          </div>
+          <Button 
+            variant="outline" 
+            className="w-full" 
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <UploadCloud className="mr-2 h-5 w-5" />
+            Upload .txt File
+          </Button>
+          <Input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            accept=".txt"
+            className="hidden"
           />
         </CardContent>
       </Card>
@@ -572,3 +621,4 @@ export default function ActiveReaderCore() {
     </div>
   );
 }
+
