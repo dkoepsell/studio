@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -5,20 +6,36 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Lightbulb, Edit3, MessageSquare, Sparkles, FileText, Upload, Trash2, Highlighter, StickyNote, CheckCircle, AlertTriangle, MessageCircleQuestion } from 'lucide-react';
+import {
+  Lightbulb, Edit3, MessageSquare, Sparkles, FileText, Trash2, Highlighter, StickyNote,
+  CheckCircle, AlertTriangle, MessageCircleQuestion, KeyRound, BookMarked, Link2, HelpCircle, Palette
+} from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { getAiAnnotationGuideAction, getAiSummaryFeedbackAction, getAiAnnotationFeedbackAction } from '@/app/actions';
 import AiHelperCard from './AiHelperCard';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Input } from '../ui/input';
 
+// Define annotation types with their properties
+const annotationDefinitions = {
+  highlight: { label: 'Highlight', abbreviation: 'HL', colorClass: 'bg-yellow-400/40', icon: Highlighter, requiresNote: false },
+  'main-idea': { label: 'Main Idea', abbreviation: 'MI', colorClass: 'bg-blue-500/30', icon: BookMarked, requiresNote: false },
+  'key-term': { label: 'Key Term', abbreviation: 'KT', colorClass: 'bg-green-500/30', icon: KeyRound, requiresNote: false },
+  evidence: { label: 'Evidence', abbreviation: 'EV', colorClass: 'bg-indigo-500/30', icon: FileText, requiresNote: false },
+  question: { label: 'Question', abbreviation: 'Q', colorClass: 'bg-purple-500/30', icon: HelpCircle, requiresNote: true },
+  connection: { label: 'Connection', abbreviation: 'CON', colorClass: 'bg-orange-500/30', icon: Link2, requiresNote: true },
+  'custom-note': { label: 'Note', abbreviation: 'N', colorClass: 'bg-gray-500/30', icon: StickyNote, requiresNote: true },
+} as const;
+
+type AnnotationDisplayType = keyof typeof annotationDefinitions;
+
 interface Annotation {
   id: string;
   start: number;
   end: number;
-  text: string;
-  note?: string;
-  type: 'highlight' | 'note';
+  text: string; // The selected text
+  type: AnnotationDisplayType;
+  note?: string; // User's custom textual note
 }
 
 interface SelectionRange {
@@ -27,15 +44,25 @@ interface SelectionRange {
   text: string;
 }
 
+// Helper type for the editing annotation state
+type EditingAnnotationPayload = {
+  id: 'new-note'; // Indicates a new annotation being created
+  start: number;
+  end: number;
+  text: string;
+  type: AnnotationDisplayType;
+};
+
+
 export default function ActiveReaderCore() {
   const [originalText, setOriginalText] = useState<string>("");
-  const [processedText, setProcessedText] = useState<string>(""); // Not strictly needed with current render logic, but kept for potential future use
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [currentSelection, setCurrentSelection] = useState<SelectionRange | null>(null);
   const [showAnnotationToolbar, setShowAnnotationToolbar] = useState(false);
   const [toolbarPosition, setToolbarPosition] = useState({ x: 0, y: 0 });
-  const [annotationNote, setAnnotationNote] = useState("");
-  const [editingAnnotation, setEditingAnnotation] = useState<Annotation | null>(null); // For the note popover
+  const [annotationNote, setAnnotationNote] = useState(""); // For new notes
+  const [editingAnnotation, setEditingAnnotation] = useState<EditingAnnotationPayload | null>(null);
+
 
   const [summaryText, setSummaryText] = useState<string>("");
   const [aiAnnotationGuide, setAiAnnotationGuide] = useState<string | null>(null);
@@ -52,7 +79,6 @@ export default function ActiveReaderCore() {
   const handleTextPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const pastedText = event.clipboardData.getData('text');
     setOriginalText(pastedText);
-    setProcessedText(pastedText);
     setAnnotations([]);
     setSummaryText("");
     setAiAnnotationGuide(null);
@@ -68,62 +94,45 @@ export default function ActiveReaderCore() {
       const range = selection.getRangeAt(0);
       const container = textDisplayRef.current;
 
-      // Check if selection is within the target display area
       if (!container.contains(range.commonAncestorContainer) || 
           (range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE && !(range.commonAncestorContainer as Element).closest('[data-text-display-area]'))) {
         setShowAnnotationToolbar(false);
-        setCurrentSelection(null);
+        // Do not clear currentSelection if a popover (editingAnnotation) is active
+        if (!editingAnnotation) {
+            setCurrentSelection(null);
+        }
         return;
       }
       
-      // Calculate start and end based on text content within the display area
-      // This is a simplified approach. For complex HTML, a more robust offset calculation would be needed.
-      const clonedContainer = container.cloneNode(true) as HTMLDivElement;
-      const walker = document.createTreeWalker(clonedContainer, NodeFilter.SHOW_TEXT);
-      let currentOffset = 0;
-      let start = -1, end = -1;
-      let node;
+      const preSelectionRange = document.createRange();
+      preSelectionRange.selectNodeContents(container);
+      preSelectionRange.setEnd(range.startContainer, range.startOffset);
+      const start = preSelectionRange.toString().length;
+      const end = start + range.toString().length;
 
-      while(node = walker.nextNode()) {
-        if (node === range.startContainer) {
-          start = currentOffset + range.startOffset;
-        }
-        if (node === range.endContainer) {
-          end = currentOffset + range.endOffset;
-          break; 
-        }
-        currentOffset += node.textContent?.length || 0;
-      }
-      
-      // Fallback for cases where direct node match fails (e.g., selection spans multiple text nodes within elements)
-      if (start === -1 || end === -1) {
-          const preSelectionRange = document.createRange();
-          preSelectionRange.selectNodeContents(container);
-          preSelectionRange.setEnd(range.startContainer, range.startOffset);
-          start = preSelectionRange.toString().length;
-          end = start + range.toString().length;
-      }
-
-
-      if (start >= 0 && end >= start) {
+      if (start >= 0 && end >= start && range.toString().trim() !== "") {
         setCurrentSelection({ start, end, text: range.toString() });
         
         const rect = range.getBoundingClientRect();
         const containerRect = container.getBoundingClientRect();
         setToolbarPosition({ 
           x: rect.left - containerRect.left + rect.width / 2, 
-          y: rect.top - containerRect.top - 10 // Position above selection
+          y: rect.top - containerRect.top - 10 
         });
-        setShowAnnotationToolbar(true);
+        if (!editingAnnotation) { // Don't show toolbar if note popover is already open
+            setShowAnnotationToolbar(true);
+        }
       } else {
          setShowAnnotationToolbar(false);
-         setCurrentSelection(null);
+         if (!editingAnnotation) {
+            setCurrentSelection(null);
+         }
       }
 
     } else {
-      setShowAnnotationToolbar(false);
-      // Do not clear currentSelection here if a popover is open based on it
+      // Only hide toolbar if not in the process of editing/adding a note
       if (!editingAnnotation) {
+        setShowAnnotationToolbar(false);
         setCurrentSelection(null);
       }
     }
@@ -133,67 +142,87 @@ export default function ActiveReaderCore() {
     const textDisplayArea = textDisplayRef.current;
     if (!textDisplayArea) return;
 
-    document.addEventListener('selectionchange', handleTextSelection);
-    // Also trigger on mouseup within the text area to catch selections finalized by mouse release
-    textDisplayArea.addEventListener('mouseup', handleTextSelection);
+    const debouncedHandleSelection = () => { // Basic debounce
+        setTimeout(handleTextSelection, 50);
+    }
+
+    document.addEventListener('selectionchange', debouncedHandleSelection);
+    textDisplayArea.addEventListener('mouseup', debouncedHandleSelection);
 
     return () => {
-      document.removeEventListener('selectionchange', handleTextSelection);
-      if (textDisplayArea) { // Check if still mounted
-          textDisplayArea.removeEventListener('mouseup', handleTextSelection);
+      document.removeEventListener('selectionchange', debouncedHandleSelection);
+      if (textDisplayArea) {
+          textDisplayArea.removeEventListener('mouseup', debouncedHandleSelection);
       }
     };
-  }, [originalText, editingAnnotation]); 
+  }, [originalText, editingAnnotation]); // Re-run if originalText changes or if a note popover opens/closes
 
-  const addAnnotation = (type: 'highlight' | 'note', noteText?: string) => {
-    if (!currentSelection || currentSelection.text.trim() === "") return;
+  const addAnnotation = (type: AnnotationDisplayType, noteText?: string) => {
+    // Use editingAnnotation if it exists (for notes added via popover), otherwise use currentSelection
+    const selectionToAnnotate = editingAnnotation || currentSelection;
+    if (!selectionToAnnotate || selectionToAnnotate.text.trim() === "") return;
+
     const newAnnotation: Annotation = {
       id: Date.now().toString(),
-      ...currentSelection,
+      start: selectionToAnnotate.start,
+      end: selectionToAnnotate.end,
+      text: selectionToAnnotate.text,
       type,
       note: noteText,
     };
     setAnnotations(prev => [...prev, newAnnotation].sort((a,b) => a.start - b.start));
-    setShowAnnotationToolbar(false);
-    setCurrentSelection(null);
-    setAnnotationNote("");
-    setEditingAnnotation(null); // Close popover
+    
     toast({
-      title: type === 'highlight' ? "Text Highlighted" : "Annotation Added",
-      description: `Selected text has been ${type === 'highlight' ? 'highlighted' : 'annotated'}.`,
+      title: `${annotationDefinitions[type].label} Added`,
+      description: `Selected text has been marked as ${annotationDefinitions[type].label.toLowerCase()}.`,
       variant: "default",
       action: <CheckCircle className="h-5 w-5 text-green-500" />,
     });
-  };
 
-  const handleHighlight = () => addAnnotation('highlight');
+    // Reset states post-addition
+    setShowAnnotationToolbar(false);
+    setCurrentSelection(null);
+    setAnnotationNote("");
+    setEditingAnnotation(null);
+  };
   
-  const handleOpenAnnotationPopup = () => {
-    if(currentSelection && currentSelection.text.trim() !== "") {
-      setAnnotationNote(""); // Reset note text
-      setEditingAnnotation({ // Use currentSelection to populate temporary annotation for popover
+  const handleToolbarAction = (type: AnnotationDisplayType) => {
+    if (!currentSelection || currentSelection.text.trim() === "") return;
+
+    const def = annotationDefinitions[type];
+    if (def.requiresNote) {
+      setAnnotationNote(""); // Reset note text for new entry
+      setEditingAnnotation({ // Set up for note popover
         id: 'new-note', 
         ...currentSelection,
-        type: 'note'
+        type: type
       });
-       // Keep toolbar open while popover is active
+      setShowAnnotationToolbar(false); // Hide toolbar, popover will show
     } else {
-      setShowAnnotationToolbar(false); // Hide toolbar if no valid selection
+      addAnnotation(type); // Add directly if no note input required initially
     }
   };
 
   const handleSaveAnnotationNote = () => {
-    if (editingAnnotation && annotationNote.trim()) { // Check if annotationNote is not just whitespace
-      // If editingAnnotation was based on currentSelection, use its details
-      const baseSelection = currentSelection && editingAnnotation.id === 'new-note' ? currentSelection : editingAnnotation;
-      addAnnotation('note', annotationNote); // addAnnotation will reset editingAnnotation
-    } else if (editingAnnotation && !annotationNote.trim()) {
+    if (editingAnnotation && (annotationNote.trim() || annotationDefinitions[editingAnnotation.type].requiresNote === false) ) {
+      addAnnotation(editingAnnotation.type, annotationNote.trim() ? annotationNote : undefined);
+    } else if (editingAnnotation && !annotationNote.trim() && annotationDefinitions[editingAnnotation.type].requiresNote === true) {
         toast({ title: "Empty Note", description: "Please enter some text for your note.", variant: "destructive" });
     } else {
-        setEditingAnnotation(null); // Close if no note entered or something went wrong
+        // If something went wrong or note was not required & empty
+        setEditingAnnotation(null); 
         setShowAnnotationToolbar(false);
+        setCurrentSelection(null); 
     }
   };
+
+  const handleCancelAnnotationNote = () => {
+    setEditingAnnotation(null);
+    setAnnotationNote("");
+    setShowAnnotationToolbar(false); // Explicitly hide toolbar
+    setCurrentSelection(null); // Clear selection as action is cancelled
+  };
+
 
   const removeAnnotation = (id: string) => {
     setAnnotations(prev => prev.filter(ann => ann.id !== id));
@@ -210,51 +239,55 @@ export default function ActiveReaderCore() {
       if (ann.start > lastIndex) {
         parts.push(originalText.substring(lastIndex, ann.start));
       }
-      const isNote = ann.type === 'note' && ann.note;
+      const def = annotationDefinitions[ann.type];
       const spanContent = (
-        <span
-          className={`px-0.5 rounded ${ann.type === 'highlight' ? 'bg-accent/30' : 'bg-primary/30'
-            } ${isNote ? 'cursor-pointer hover:bg-primary/50' : ''}`}
-        >
+        <span className={`px-0.5 py-0.5 rounded relative group ${def.colorClass} cursor-pointer hover:brightness-110 transition-all `}>
           {originalText.substring(ann.start, ann.end)}
+          <span 
+            className={`ml-0.5 text-[0.6rem] font-bold p-[1px] px-[3px] rounded-sm align-super ${def.colorClass.replace('/30', '/60').replace('/40','/70')} text-black/70`}
+            title={def.label}
+          >
+            {def.abbreviation}
+          </span>
         </span>
       );
 
-      if (isNote) {
-        parts.push(
-          <Popover key={ann.id}>
-            <PopoverTrigger asChild>{spanContent}</PopoverTrigger>
-            <PopoverContent className="w-80 shadow-xl">
-              <div className="grid gap-4">
-                <div className="space-y-2">
-                  <h4 className="font-medium leading-none text-primary">Annotation Note</h4>
-                  <p className="text-sm text-muted-foreground">
-                    For text: <span className="italic">"{ann.text}"</span>
-                  </p>
+      parts.push(
+        <Popover key={ann.id}>
+          <PopoverTrigger asChild>{spanContent}</PopoverTrigger>
+          <PopoverContent className="w-80 shadow-xl">
+            <div className="grid gap-4">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <def.icon className={`h-5 w-5 ${def.colorClass.replace('bg-', 'text-').replace('/30', '-700').replace('/40','-700')}`} />
+                  <h4 className="font-medium leading-none">{def.label}</h4>
                 </div>
-                <p className="text-sm">{ann.note}</p>
-                <Button variant="outline" size="sm" onClick={() => removeAnnotation(ann.id)}>
-                  <Trash2 className="mr-2 h-4 w-4" /> Delete Annotation
-                </Button>
+                <p className="text-sm text-muted-foreground break-words">
+                  Annotated: <span className="italic">"{ann.text}"</span>
+                </p>
               </div>
-            </PopoverContent>
-          </Popover>
-        );
-      } else {
-        parts.push(
-          <span key={ann.id}>
-            {spanContent}
-          </span>
-        );
-      }
+              {ann.note ? (
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">Note:</p>
+                  <p className="text-sm bg-secondary/50 p-2 rounded whitespace-pre-wrap break-words">{ann.note}</p>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground italic">No additional note for this annotation.</p>
+              )}
+              <Button variant="outline" size="sm" onClick={() => removeAnnotation(ann.id)} className="mt-2">
+                <Trash2 className="mr-2 h-4 w-4" /> Delete Annotation
+              </Button>
+            </div>
+          </PopoverContent>
+        </Popover>
+      );
       lastIndex = ann.end;
     });
 
     if (lastIndex < originalText.length) {
       parts.push(originalText.substring(lastIndex));
     }
-    // Add data-text-display-area to the div for more precise selection detection
-    return <div ref={textDisplayRef} data-text-display-area className="whitespace-pre-wrap leading-relaxed selection:bg-accent selection:text-accent-foreground">{parts}</div>;
+    return <div ref={textDisplayRef} data-text-display-area className="whitespace-pre-wrap leading-relaxed selection:bg-blue-300 selection:text-blue-900">{parts}</div>;
   };
 
   const fetchAiGuide = async () => {
@@ -305,12 +338,12 @@ export default function ActiveReaderCore() {
     setIsLoadingAiAnnotationFeedback(true);
     setAiAnnotationFeedback(null);
     try {
-      const annotationDetails = annotations.map(ann => ({
-        text: ann.text, // Text content of the annotation itself
+      const annotationDetailsForAI = annotations.map(ann => ({
+        text: ann.text,
         type: ann.type,
         note: ann.note,
       }));
-      const result = await getAiAnnotationFeedbackAction({ originalText, annotations: annotationDetails });
+      const result = await getAiAnnotationFeedbackAction({ originalText, annotations: annotationDetailsForAI });
       setAiAnnotationFeedback(result.feedback);
       toast({ title: "Annotation Feedback Generated", description: "Feedback on your annotations is available." });
     } catch (error) {
@@ -341,8 +374,7 @@ export default function ActiveReaderCore() {
             onPaste={handleTextPaste}
             onChange={(e) => {
               setOriginalText(e.target.value);
-              setProcessedText(e.target.value); // Update processed text on change
-              setAnnotations([]); // Clear annotations if text changes substantially
+              setAnnotations([]); 
               setSummaryText("");
               setAiAnnotationGuide(null);
               setAiSummaryFeedback(null);
@@ -361,63 +393,80 @@ export default function ActiveReaderCore() {
                 <Edit3 className="h-6 w-6 text-primary" />
                 <CardTitle>Active Reading Space</CardTitle>
               </div>
-              <CardDescription>Select text to highlight or annotate. Your annotations will appear highlighted or noted in the text.</CardDescription>
+              <CardDescription>Select text to apply an annotation. Your annotations will appear in the text below.</CardDescription>
             </CardHeader>
             <CardContent className="prose max-w-none min-h-[300px] p-6 text-base relative">
               {renderTextWithAnnotations()}
-              {showAnnotationToolbar && currentSelection && currentSelection.text.trim() !== "" && (
+              {showAnnotationToolbar && currentSelection && currentSelection.text.trim() !== "" && !editingAnnotation && (
                 <div 
-                  className="absolute bg-card border border-border rounded-md shadow-lg p-1 flex gap-1 z-10"
+                  className="absolute bg-card border border-border rounded-md shadow-lg p-1 flex flex-wrap gap-1 z-10"
                   style={{ left: Math.max(0, toolbarPosition.x), top: Math.max(0, toolbarPosition.y), transform: 'translate(-50%, -100%)' }}
-                  // Prevent toolbar from closing when clicking on it
                   onMouseDown={(e) => e.stopPropagation()} 
                   onMouseUp={(e) => e.stopPropagation()}
                 >
-                  <Button variant="outline" size="sm" onClick={handleHighlight} className="p-2">
-                    <Highlighter className="h-4 w-4" />
-                  </Button>
-                  <Popover 
-                    open={!!editingAnnotation} 
-                    onOpenChange={(isOpen) => {
-                      if (!isOpen) {
-                        setEditingAnnotation(null);
-                        // setShowAnnotationToolbar(false); // Hide toolbar when popover closes
-                      } else {
-                        // This case is handled by handleOpenAnnotationPopup
-                      }
-                    }}
-                  >
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" size="sm" onClick={handleOpenAnnotationPopup} className="p-2">
-                        <StickyNote className="h-4 w-4" />
-                      </Button>
-                    </PopoverTrigger>
-                    {editingAnnotation && ( // Ensure editingAnnotation is not null before rendering PopoverContent
-                      <PopoverContent className="w-64 p-4">
-                        <div className="space-y-2">
-                          <p className="text-sm font-medium">Add Note</p>
-                          <Textarea 
-                            placeholder="Type your note..." 
-                            value={annotationNote}
-                            onChange={(e) => setAnnotationNote(e.target.value)}
-                            rows={3}
-                          />
-                          <div className="flex justify-end gap-2">
-                            <Button variant="ghost" size="sm" onClick={() => { setEditingAnnotation(null); setAnnotationNote(""); setShowAnnotationToolbar(false); }}>Cancel</Button>
-                            <Button size="sm" onClick={handleSaveAnnotationNote}>Save</Button>
-                          </div>
-                        </div>
-                      </PopoverContent>
-                    )}
-                  </Popover>
+                  {Object.entries(annotationDefinitions).map(([type, def]) => (
+                    <Button 
+                      key={type} 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => handleToolbarAction(type as AnnotationDisplayType)} 
+                      className="p-2"
+                      title={def.label}
+                    >
+                      <def.icon className="h-4 w-4" />
+                    </Button>
+                  ))}
                 </div>
               )}
+              {/* Popover for adding/editing notes, triggered by editingAnnotation state */}
+              <Popover 
+                open={!!editingAnnotation} 
+                onOpenChange={(isOpen) => {
+                  if (!isOpen) {
+                    handleCancelAnnotationNote(); // Clear states if popover is closed externally
+                  }
+                }}
+              >
+                <PopoverTrigger asChild>
+                  {/* This trigger is now virtual, controlled by editingAnnotation state */}
+                  <span />
+                </PopoverTrigger>
+                {editingAnnotation && ( 
+                  <PopoverContent 
+                    className="w-64 p-4" 
+                    style={{
+                        position: 'absolute',
+                        left: Math.max(0, toolbarPosition.x), 
+                        top: Math.max(0, toolbarPosition.y - 20), // Adjust position slightly above where toolbar was
+                        transform: 'translate(-50%, -100%)',
+                        zIndex: 20, 
+                    }}
+                    onOpenAutoFocus={(e) => e.preventDefault()} // Prevent focus stealing
+                    onPointerDownOutside={handleCancelAnnotationNote} // Handle click outside
+                  >
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Add Note for {annotationDefinitions[editingAnnotation.type].label}</p>
+                      <Textarea 
+                        placeholder="Type your note..." 
+                        value={annotationNote}
+                        onChange={(e) => setAnnotationNote(e.target.value)}
+                        rows={3}
+                        autoFocus
+                      />
+                      <div className="flex justify-end gap-2">
+                        <Button variant="ghost" size="sm" onClick={handleCancelAnnotationNote}>Cancel</Button>
+                        <Button size="sm" onClick={handleSaveAnnotationNote}>Save</Button>
+                      </div>
+                    </div>
+                  </PopoverContent>
+                )}
+              </Popover>
             </CardContent>
           </Card>
 
           <div className="space-y-6 md:col-span-1">
             <Tabs defaultValue="ai-guide" className="w-full">
-              <TabsList className="grid w-full grid-cols-4"> {/* Updated to 4 columns */}
+              <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="ai-guide"><Lightbulb className="mr-1 h-4 w-4 inline-block"/>Guide</TabsTrigger>
                 <TabsTrigger value="ann-feedback"><MessageCircleQuestion className="mr-1 h-4 w-4 inline-block"/>Ann. Fbk</TabsTrigger>
                 <TabsTrigger value="summary"><MessageSquare className="mr-1 h-4 w-4 inline-block"/>Summary</TabsTrigger>
@@ -434,7 +483,7 @@ export default function ActiveReaderCore() {
                       {isLoadingAiGuide ? "Generating..." : "Get Guide"}
                     </Button>
                   }
-                  placeholderText="Click 'Get Guide' to see AI-suggested annotations."
+                  placeholderText="Click 'Get Guide' to see AI-suggested annotations for the text."
                 />
               </TabsContent>
               <TabsContent value="ann-feedback">
@@ -448,7 +497,7 @@ export default function ActiveReaderCore() {
                       {isLoadingAiAnnotationFeedback ? "Analyzing..." : "Get Feedback"}
                     </Button>
                   }
-                  placeholderText="Make some annotations on the text, then click 'Get Feedback'."
+                  placeholderText="Make some annotations on the text, then click 'Get Feedback' to see how you did."
                 />
               </TabsContent>
               <TabsContent value="summary">
@@ -482,7 +531,7 @@ export default function ActiveReaderCore() {
                       {isLoadingAiSummaryFeedback ? "Analyzing..." : "Get Feedback"}
                     </Button>
                   }
-                  placeholderText="Submit your summary to get AI-powered feedback."
+                  placeholderText="Write a summary and then click 'Get Feedback' for AI insights."
                 />
               </TabsContent>
             </Tabs>
@@ -493,25 +542,27 @@ export default function ActiveReaderCore() {
                   <CardTitle className="text-lg font-medium">Your Annotations</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {annotations.length > 0 ? (
-                    <ul className="space-y-3 max-h-60 overflow-y-auto">
-                      {annotations.map(ann => (
-                        <li key={ann.id} className="text-sm p-3 border rounded-md bg-secondary/30 hover:shadow-md transition-shadow">
+                  <ul className="space-y-3 max-h-60 overflow-y-auto">
+                    {annotations.map(ann => {
+                      const def = annotationDefinitions[ann.type];
+                      return (
+                        <li key={ann.id} className={`text-sm p-3 border rounded-md ${def.colorClass.replace('/30','/20').replace('/40','/20')} hover:shadow-md transition-shadow`}>
                           <div className="flex justify-between items-start">
-                            <div>
-                              <p className={`font-semibold ${ann.type === 'highlight' ? 'text-accent-foreground' : 'text-primary'} truncate max-w-[200px]`}>{ann.text}</p>
-                              {ann.note && <p className="text-muted-foreground mt-1">Note: {ann.note}</p>}
+                            <div className="flex-grow overflow-hidden">
+                              <div className="flex items-center gap-1.5">
+                                <def.icon className={`h-4 w-4 shrink-0 ${def.colorClass.replace('bg-', 'text-').replace('/30', '-700').replace('/40','-700')}`} />
+                                <p className={`font-semibold text-sm truncate`}>{def.label}: <span className="italic font-normal">"{ann.text}"</span></p>
+                              </div>
+                              {ann.note && <p className="text-xs text-muted-foreground mt-1 pl-5 whitespace-pre-wrap break-words">Note: {ann.note}</p>}
                             </div>
-                            <Button variant="ghost" size="sm" onClick={() => removeAnnotation(ann.id)} className="text-destructive hover:text-destructive/80 p-1 h-auto">
+                            <Button variant="ghost" size="sm" onClick={() => removeAnnotation(ann.id)} className="text-destructive hover:text-destructive/80 p-1 h-auto ml-2 shrink-0">
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
                         </li>
-                      ))}
-                    </ul>
-                  ) : (
-                     <p className="text-sm text-muted-foreground">No annotations yet. Select text to start.</p>
-                  )}
+                      );
+                    })}
+                  </ul>
                 </CardContent>
               </Card>
             )}
