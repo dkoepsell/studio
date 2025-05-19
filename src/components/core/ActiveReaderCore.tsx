@@ -8,13 +8,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Lightbulb, Edit3, MessageSquare, Sparkles, FileText, Trash2, Highlighter, StickyNote,
-  CheckCircle, AlertTriangle, MessageCircleQuestion, KeyRound, BookMarked, Link2, HelpCircle, UploadCloud
+  CheckCircle, AlertTriangle, MessageCircleQuestion, KeyRound, BookMarked, Link2, HelpCircle, UploadCloud, Loader2
 } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { getAiAnnotationGuideAction, getAiSummaryFeedbackAction, getAiAnnotationFeedbackAction } from '@/app/actions';
 import AiHelperCard from './AiHelperCard';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Input } from '../ui/input';
+import { getDocument, GlobalWorkerOptions, version as pdfjsVersion } from 'pdfjs-dist';
+import type { PDFDocumentProxy } from 'pdfjs-dist';
+
 
 // Define annotation types with their properties
 const annotationDefinitions = {
@@ -72,10 +75,18 @@ export default function ActiveReaderCore() {
   const [isLoadingAiGuide, setIsLoadingAiGuide] = useState<boolean>(false);
   const [isLoadingAiSummaryFeedback, setIsLoadingAiSummaryFeedback] = useState<boolean>(false);
   const [isLoadingAiAnnotationFeedback, setIsLoadingAiAnnotationFeedback] = useState<boolean>(false);
+  const [isFileLoading, setIsFileLoading] = useState<boolean>(false);
   
   const textDisplayRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    // Configure PDF.js worker. Using a CDN for simplicity.
+    // For local hosting, copy 'pdf.worker.min.mjs' from 'node_modules/pdfjs-dist/build/' to '/public'
+    // and set GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+    GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsVersion}/pdf.worker.min.mjs`;
+  }, []);
 
   const resetAppStateForNewText = () => {
     setAnnotations([]);
@@ -100,24 +111,49 @@ export default function ActiveReaderCore() {
     resetAppStateForNewText();
   };
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      if (file.type === "text/plain") {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const text = e.target?.result as string;
-          setOriginalText(text);
-          resetAppStateForNewText();
-          toast({ title: "File Loaded", description: `${file.name} has been loaded.` });
-        };
-        reader.onerror = () => {
-          toast({ title: "File Read Error", description: "Could not read the selected file.", variant: "destructive" });
-        };
-        reader.readAsText(file);
-      } else {
-        toast({ title: "Unsupported File Type", description: "Please upload a .txt file.", variant: "destructive" });
+      setIsFileLoading(true);
+      resetAppStateForNewText();
+      toast({ title: "Loading File", description: `Processing ${file.name}...` });
+
+      try {
+        if (file.type === "text/plain") {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const text = e.target?.result as string;
+            setOriginalText(text);
+            toast({ title: "File Loaded", description: `${file.name} has been loaded.` });
+            setIsFileLoading(false);
+          };
+          reader.onerror = () => {
+            toast({ title: "File Read Error", description: "Could not read the selected .txt file.", variant: "destructive" });
+            setIsFileLoading(false);
+          };
+          reader.readAsText(file);
+        } else if (file.type === "application/pdf") {
+          const arrayBuffer = await file.arrayBuffer();
+          const pdf: PDFDocumentProxy = await getDocument({ data: arrayBuffer }).promise;
+          let fullText = "";
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            fullText += textContent.items.map((item: any) => item.str).join(" ") + "\n"; // basic text extraction
+          }
+          setOriginalText(fullText);
+          toast({ title: "PDF Loaded", description: `${file.name} has been processed and text extracted.` });
+          setIsFileLoading(false);
+        } else {
+          toast({ title: "Unsupported File Type", description: "Please upload a .txt or .pdf file.", variant: "destructive" });
+          setIsFileLoading(false);
+        }
+      } catch (error) {
+        console.error("Error processing file:", error);
+        toast({ title: "File Processing Error", description: `Could not process ${file.name}. It might be corrupted or an unsupported format.`, variant: "destructive" });
+        setIsFileLoading(false);
       }
+      
       // Reset file input value to allow re-uploading the same file if needed
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -126,7 +162,7 @@ export default function ActiveReaderCore() {
   };
   
   const handleTextSelection = () => {
-    if (!textDisplayRef.current) return;
+    if (!textDisplayRef.current || isFileLoading) return;
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
       const range = selection.getRangeAt(0);
@@ -135,7 +171,6 @@ export default function ActiveReaderCore() {
       if (!container.contains(range.commonAncestorContainer) || 
           (range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE && !(range.commonAncestorContainer as Element).closest('[data-text-display-area]'))) {
         setShowAnnotationToolbar(false);
-        // Do not clear currentSelection if a popover (editingAnnotation) is active
         if (!editingAnnotation) {
             setCurrentSelection(null);
         }
@@ -157,7 +192,7 @@ export default function ActiveReaderCore() {
           x: rect.left - containerRect.left + rect.width / 2, 
           y: rect.top - containerRect.top - 10 
         });
-        if (!editingAnnotation) { // Don't show toolbar if note popover is already open
+        if (!editingAnnotation) { 
             setShowAnnotationToolbar(true);
         }
       } else {
@@ -168,7 +203,6 @@ export default function ActiveReaderCore() {
       }
 
     } else {
-      // Only hide toolbar if not in the process of editing/adding a note
       if (!editingAnnotation) {
         setShowAnnotationToolbar(false);
         setCurrentSelection(null);
@@ -178,9 +212,9 @@ export default function ActiveReaderCore() {
 
   useEffect(() => {
     const textDisplayArea = textDisplayRef.current;
-    if (!textDisplayArea) return;
+    if (!textDisplayArea || isFileLoading) return;
 
-    const debouncedHandleSelection = () => { // Basic debounce
+    const debouncedHandleSelection = () => { 
         setTimeout(handleTextSelection, 50);
     }
 
@@ -193,10 +227,9 @@ export default function ActiveReaderCore() {
           textDisplayArea.removeEventListener('mouseup', debouncedHandleSelection);
       }
     };
-  }, [originalText, editingAnnotation]); // Re-run if originalText changes or if a note popover opens/closes
+  }, [originalText, editingAnnotation, isFileLoading]); 
 
   const addAnnotation = (type: AnnotationDisplayType, noteText?: string) => {
-    // Use editingAnnotation if it exists (for notes added via popover), otherwise use currentSelection
     const selectionToAnnotate = editingAnnotation || currentSelection;
     if (!selectionToAnnotate || selectionToAnnotate.text.trim() === "") return;
 
@@ -217,7 +250,6 @@ export default function ActiveReaderCore() {
       action: <CheckCircle className="h-5 w-5 text-green-500" />,
     });
 
-    // Reset states post-addition
     setShowAnnotationToolbar(false);
     setCurrentSelection(null);
     setAnnotationNote("");
@@ -229,15 +261,15 @@ export default function ActiveReaderCore() {
 
     const def = annotationDefinitions[type];
     if (def.requiresNote) {
-      setAnnotationNote(""); // Reset note text for new entry
-      setEditingAnnotation({ // Set up for note popover
+      setAnnotationNote(""); 
+      setEditingAnnotation({ 
         id: 'new-note', 
         ...currentSelection,
         type: type
       });
-      setShowAnnotationToolbar(false); // Hide toolbar, popover will show
+      setShowAnnotationToolbar(false); 
     } else {
-      addAnnotation(type); // Add directly if no note input required initially
+      addAnnotation(type); 
     }
   };
 
@@ -247,7 +279,6 @@ export default function ActiveReaderCore() {
     } else if (editingAnnotation && !annotationNote.trim() && annotationDefinitions[editingAnnotation.type].requiresNote === true) {
         toast({ title: "Empty Note", description: "Please enter some text for your note.", variant: "destructive" });
     } else {
-        // If something went wrong or note was not required & empty
         setEditingAnnotation(null); 
         setShowAnnotationToolbar(false);
         setCurrentSelection(null); 
@@ -257,8 +288,8 @@ export default function ActiveReaderCore() {
   const handleCancelAnnotationNote = () => {
     setEditingAnnotation(null);
     setAnnotationNote("");
-    setShowAnnotationToolbar(false); // Explicitly hide toolbar
-    setCurrentSelection(null); // Clear selection as action is cancelled
+    setShowAnnotationToolbar(false); 
+    setCurrentSelection(null); 
   };
 
 
@@ -268,7 +299,8 @@ export default function ActiveReaderCore() {
   };
 
   const renderTextWithAnnotations = () => {
-    if (!originalText) return <p className="text-muted-foreground">Paste your text or upload a .txt file to begin.</p>;
+    if (isFileLoading) return <div className="flex flex-col items-center justify-center min-h-[100px]"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="text-muted-foreground mt-2">Processing file...</p></div>;
+    if (!originalText) return <p className="text-muted-foreground">Paste your text or upload a .txt/.pdf file to begin.</p>;
 
     let lastIndex = 0;
     const parts: (string | JSX.Element)[] = [];
@@ -401,7 +433,7 @@ export default function ActiveReaderCore() {
             <CardTitle>Import Your Text</CardTitle>
           </div>
           <CardDescription>
-            Paste your text into the area below, or upload a .txt file.
+            Paste your text into the area below, or upload a .txt or .pdf file.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -412,6 +444,7 @@ export default function ActiveReaderCore() {
             onPaste={handleTextPaste}
             onChange={(e) => handleManualTextChange(e.target.value)}
             className="text-base"
+            disabled={isFileLoading}
           />
           <div className="flex items-center justify-center">
             <span className="text-sm text-muted-foreground">OR</span>
@@ -420,21 +453,23 @@ export default function ActiveReaderCore() {
             variant="outline" 
             className="w-full" 
             onClick={() => fileInputRef.current?.click()}
+            disabled={isFileLoading}
           >
-            <UploadCloud className="mr-2 h-5 w-5" />
-            Upload .txt File
+            {isFileLoading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <UploadCloud className="mr-2 h-5 w-5" />}
+            {isFileLoading ? 'Processing File...' : 'Upload .txt / .pdf File'}
           </Button>
           <Input
             type="file"
             ref={fileInputRef}
             onChange={handleFileChange}
-            accept=".txt"
+            accept=".txt,.pdf"
             className="hidden"
+            disabled={isFileLoading}
           />
         </CardContent>
       </Card>
 
-      {originalText && (
+      {originalText && !isFileLoading && (
         <div className="grid md:grid-cols-3 gap-6">
           <Card className="md:col-span-2 shadow-xl relative">
             <CardHeader>
@@ -467,17 +502,15 @@ export default function ActiveReaderCore() {
                   ))}
                 </div>
               )}
-              {/* Popover for adding/editing notes, triggered by editingAnnotation state */}
               <Popover 
                 open={!!editingAnnotation} 
                 onOpenChange={(isOpen) => {
                   if (!isOpen) {
-                    handleCancelAnnotationNote(); // Clear states if popover is closed externally
+                    handleCancelAnnotationNote(); 
                   }
                 }}
               >
                 <PopoverTrigger asChild>
-                  {/* This trigger is now virtual, controlled by editingAnnotation state */}
                   <span />
                 </PopoverTrigger>
                 {editingAnnotation && ( 
@@ -486,12 +519,12 @@ export default function ActiveReaderCore() {
                     style={{
                         position: 'absolute',
                         left: Math.max(0, toolbarPosition.x), 
-                        top: Math.max(0, toolbarPosition.y - 20), // Adjust position slightly above where toolbar was
+                        top: Math.max(0, toolbarPosition.y - 20), 
                         transform: 'translate(-50%, -100%)',
                         zIndex: 20, 
                     }}
-                    onOpenAutoFocus={(e) => e.preventDefault()} // Prevent focus stealing
-                    onPointerDownOutside={handleCancelAnnotationNote} // Handle click outside
+                    onOpenAutoFocus={(e) => e.preventDefault()} 
+                    onPointerDownOutside={handleCancelAnnotationNote} 
                   >
                     <div className="space-y-2">
                       <p className="text-sm font-medium">Add Note for {annotationDefinitions[editingAnnotation.type].label}</p>
@@ -618,7 +651,12 @@ export default function ActiveReaderCore() {
           </div>
         </div>
       )}
+      {isFileLoading && !originalText && (
+         <div className="flex flex-col items-center justify-center min-h-[300px]">
+            <Loader2 className="h-12 w-12 animate-spin text-primary" />
+            <p className="text-muted-foreground mt-4 text-lg">Processing your file, please wait...</p>
+        </div>
+      )}
     </div>
   );
 }
-
