@@ -328,7 +328,7 @@ export default function ActiveReaderCore() {
 
     tempAnnotations.forEach(ann => {
       if (ann.start > lastIndex) {
-        parts.push(originalText.substring(lastIndex, ann.start));
+        parts.push(<React.Fragment key={`text-before-${ann.id}`}>{originalText.substring(lastIndex, ann.start)}</React.Fragment>);
       }
       const def = annotationDefinitions[ann.type];
       const isPending = ann.id === 'pending-connection-start';
@@ -357,7 +357,7 @@ export default function ActiveReaderCore() {
       );
 
       if (isPending) {
-        parts.push(spanContent);
+        parts.push(React.cloneElement(spanContent, { key: ann.id }));
       } else {
          parts.push(
           <Popover key={ann.id}>
@@ -386,7 +386,7 @@ export default function ActiveReaderCore() {
     });
 
     if (lastIndex < originalText.length) {
-      parts.push(originalText.substring(lastIndex));
+      parts.push(<React.Fragment key={`text-trailing-${lastIndex}`}>{originalText.substring(lastIndex)}</React.Fragment>);
     }
     // Add a visual cue if connecting
     let statusText = "";
@@ -767,3 +767,4 @@ export default function ActiveReaderCore() {
     </div>
   );
 }
+
