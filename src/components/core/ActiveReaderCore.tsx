@@ -26,7 +26,7 @@ const annotationDefinitions = {
   'key-term': { label: 'Key Term', abbreviation: 'KT', colorClass: 'bg-green-500/30', icon: KeyRound, description: "Mark an important vocabulary word or concept." },
   evidence: { label: 'Evidence', abbreviation: 'EV', colorClass: 'bg-indigo-500/30', icon: FileText, description: "Point to supporting details or examples." },
   question: { label: 'Question', abbreviation: 'Q', colorClass: 'bg-purple-500/30', icon: HelpCircle, description: "Mark a point of inquiry in the text." },
-  connection: { label: 'Connection', abbreviation: 'CON', colorClass: 'bg-orange-500/30', icon: Link2, description: "Link two parts of the text." },
+  connection: { label: 'Connection', abbreviation: 'CON', colorClass: 'bg-orange-500/30', icon: Link2, description: "Link two parts of the text. Select first text, click tool, then select second text." },
   'custom-note': { label: 'Note', abbreviation: 'N', colorClass: 'bg-gray-500/30', icon: StickyNote, description: "Mark a general observation or comment." },
 } as const;
 
@@ -52,6 +52,14 @@ interface ConnectionAnnotation {
   to: SelectionRange;
 }
 
+interface LineDrawData {
+  id: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
 
 export default function ActiveReaderCore() {
   const [originalText, setOriginalText] = useState<string>("");
@@ -74,6 +82,7 @@ export default function ActiveReaderCore() {
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [pendingConnectionStart, setPendingConnectionStart] = useState<SelectionRange | null>(null);
   const [connections, setConnections] = useState<ConnectionAnnotation[]>([]);
+  const [lineDrawData, setLineDrawData] = useState<LineDrawData[]>([]);
 
 
   const textDisplayRef = useRef<HTMLDivElement>(null);
@@ -86,15 +95,16 @@ export default function ActiveReaderCore() {
 
   const resetAppStateForNewText = () => {
     setAnnotations([]);
-    setConnections([]); 
+    setConnections([]);
     setSummaryText("");
     setAiAnnotationGuide(null);
     setAiSummaryFeedback(null);
     setAiAnnotationFeedback(null);
     setCurrentSelection(null);
     setShowAnnotationToolbar(false);
-    setIsConnecting(false); 
-    setPendingConnectionStart(null); 
+    setIsConnecting(false);
+    setPendingConnectionStart(null);
+    setLineDrawData([]);
   };
 
   const handleTextPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -168,7 +178,7 @@ export default function ActiveReaderCore() {
 
       if (!container.contains(range.commonAncestorContainer) ||
           (range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE && !(range.commonAncestorContainer as Element).closest('[data-text-display-area]'))) {
-        if (!isConnecting) { // Only hide toolbar if not actively connecting
+        if (!isConnecting) {
           setShowAnnotationToolbar(false);
           setCurrentSelection(null);
         }
@@ -183,7 +193,7 @@ export default function ActiveReaderCore() {
 
       if (start >= 0 && end > start && range.toString().trim() !== "") {
         setCurrentSelection({ start, end, text: range.toString() });
-        if (!isConnecting) { // Only show toolbar if not in the middle of a connection
+        if (!isConnecting) {
           const rect = range.getBoundingClientRect();
           const containerRect = container.getBoundingClientRect();
           setToolbarPosition({
@@ -194,15 +204,15 @@ export default function ActiveReaderCore() {
           });
           setShowAnnotationToolbar(true);
         } else {
-             setShowAnnotationToolbar(false); // Ensure toolbar is hidden when selecting 'to' point
+             setShowAnnotationToolbar(false);
         }
-      } else { // Invalid selection
+      } else {
         if (!isConnecting) {
           setShowAnnotationToolbar(false);
           setCurrentSelection(null);
         }
       }
-    } else { // No selection or selection collapsed
+    } else {
       if (!isConnecting) {
         setShowAnnotationToolbar(false);
         setCurrentSelection(null);
@@ -215,13 +225,11 @@ export default function ActiveReaderCore() {
     const textDisplayArea = textDisplayRef.current;
     if (!textDisplayArea || isFileLoading) return;
 
-    // Using a longer debounce to see if it helps with selection stability
     const debouncedHandleSelection = () => {
         setTimeout(handleTextSelection, 100);
     }
 
     document.addEventListener('selectionchange', debouncedHandleSelection);
-    // `mouseup` might be more reliable for final selection state
     textDisplayArea.addEventListener('mouseup', debouncedHandleSelection);
 
 
@@ -231,7 +239,7 @@ export default function ActiveReaderCore() {
         textDisplayArea.removeEventListener('mouseup', debouncedHandleSelection);
       }
     };
-  }, [originalText, isFileLoading, handleTextSelection]); // handleTextSelection is now memoized
+  }, [originalText, isFileLoading, handleTextSelection]);
 
 
   const addAnnotation = (type: AnnotationDisplayType) => {
@@ -259,8 +267,6 @@ export default function ActiveReaderCore() {
 
   const handleToolbarAction = (type: AnnotationDisplayType) => {
     if (!currentSelection || currentSelection.text.trim() === "") {
-      // If trying to complete a connection, currentSelection is the 'to' point.
-      // If it's empty, it's an issue handled inside the 'connection' block.
       if (type !== 'connection' || !isConnecting) {
           toast({ title: "No Text Selected", description: "Please select some text first.", variant: "destructive" });
           return;
@@ -268,8 +274,8 @@ export default function ActiveReaderCore() {
     }
     
     if (type === 'connection') {
-      if (!isConnecting) { // Start a new connection
-        if (!currentSelection || currentSelection.text.trim() === "") { // Should not happen if toolbar was shown
+      if (!isConnecting) {
+        if (!currentSelection || currentSelection.text.trim() === "") {
              toast({ title: "No Text Selected", description: "Please select text for the start of the connection.", variant: "destructive" });
              return;
         }
@@ -278,7 +284,7 @@ export default function ActiveReaderCore() {
         setCurrentSelection(null); 
         setShowAnnotationToolbar(false);
         toast({ title: "Connection Started", description: "Now select the second piece of text to connect to." });
-      } else { // Complete the connection
+      } else { 
         if (pendingConnectionStart) {
           if (!currentSelection || currentSelection.text.trim() === "") {
             toast({ title: "No 'To' Text Selected", description: "Please select the second piece of text to complete the connection.", variant: "destructive" });
@@ -296,17 +302,16 @@ export default function ActiveReaderCore() {
           setConnections(prev => [...prev, newConnection]);
           toast({ title: "Connection Created!", description: `Connected "${pendingConnectionStart.text}" to "${currentSelection.text}".`});
         }
-        // Reset connection state
         setIsConnecting(false);
         setPendingConnectionStart(null);
         setCurrentSelection(null);
         setShowAnnotationToolbar(false);
       }
-    } else { // Handle other annotation types
+    } else { 
       if (isConnecting) { 
         setIsConnecting(false);
         setPendingConnectionStart(null);
-        setCurrentSelection(null); // Also clear current selection if a different tool is chosen
+        setCurrentSelection(null); 
         toast({ title: "Connection Cancelled", description: "Annotation type changed before connection was completed.", variant: "destructive" });
       }
       addAnnotation(type);
@@ -323,62 +328,138 @@ export default function ActiveReaderCore() {
     toast({ title: "Connection Removed", variant: "destructive" });
   };
 
+  const calculateLineCoordinates = useCallback(() => {
+    if (!textDisplayRef.current) return;
+    const containerRect = textDisplayRef.current.getBoundingClientRect();
+    const newLines: LineDrawData[] = [];
+
+    connections.forEach(conn => {
+      const fromEl = textDisplayRef.current?.querySelector(`[data-conn-marker-id="${conn.id}-from"]`);
+      const toEl = textDisplayRef.current?.querySelector(`[data-conn-marker-id="${conn.id}-to"]`);
+
+      if (fromEl && toEl) {
+        const fromRect = fromEl.getBoundingClientRect();
+        const toRect = toEl.getBoundingClientRect();
+
+        newLines.push({
+          id: conn.id,
+          x1: fromRect.left - containerRect.left + fromRect.width / 2,
+          y1: fromRect.top - containerRect.top + fromRect.height / 2,
+          x2: toRect.left - containerRect.left + toRect.width / 2,
+          y2: toRect.top - containerRect.top + toRect.height / 2,
+        });
+      }
+    });
+    setLineDrawData(newLines);
+  }, [connections, originalText, annotations, pendingConnectionStart]); // Re-calculate if these change DOM structure
+
+  useEffect(() => {
+    calculateLineCoordinates();
+    window.addEventListener('resize', calculateLineCoordinates);
+    return () => {
+      window.removeEventListener('resize', calculateLineCoordinates);
+    };
+  }, [calculateLineCoordinates]);
+
 
   const renderTextWithAnnotations = () => {
     if (isFileLoading) return <div className="flex flex-col items-center justify-center min-h-[100px]"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="text-muted-foreground mt-2">Processing file...</p></div>;
     if (!originalText) return <p className="text-muted-foreground">Paste your text or upload a .txt/.pdf file to begin.</p>;
 
-    let lastIndex = 0;
     const parts: (string | JSX.Element)[] = [];
-
-    const tempAnnotations = [...annotations];
+    
+    // Create a list of all event points: 0, text length, and all annotation/connection start/end points
+    let eventPoints = new Set<number>([0, originalText.length]);
+    annotations.forEach(ann => {
+      eventPoints.add(ann.start);
+      eventPoints.add(ann.end);
+    });
+    connections.forEach(conn => {
+      eventPoints.add(conn.from.start);
+      eventPoints.add(conn.from.end);
+      eventPoints.add(conn.to.start);
+      eventPoints.add(conn.to.end);
+    });
     if (isConnecting && pendingConnectionStart) {
-        tempAnnotations.push({
-            id: 'pending-connection-start',
-            start: pendingConnectionStart.start,
-            end: pendingConnectionStart.end,
-            text: pendingConnectionStart.text,
-            type: 'highlight', 
-        });
-        tempAnnotations.sort((a,b) => a.start - b.start);
+      eventPoints.add(pendingConnectionStart.start);
+      eventPoints.add(pendingConnectionStart.end);
     }
 
+    const sortedPoints = Array.from(eventPoints).sort((a, b) => a - b);
 
-    tempAnnotations.forEach(ann => {
-      if (ann.start > lastIndex) {
-        parts.push(<React.Fragment key={`text-before-${ann.id}`}>{originalText.substring(lastIndex, ann.start)}</React.Fragment>);
+    for (let i = 0; i < sortedPoints.length -1; i++) {
+      const start = sortedPoints[i];
+      const end = sortedPoints[i+1];
+
+      if (start >= end) continue; // Skip empty or invalid segments
+
+      const segmentText = originalText.substring(start, end);
+      if (!segmentText) continue;
+
+      let segmentClasses = "px-0.5 py-0.5 rounded relative group hover:brightness-110 transition-all";
+      let dataAttributes: Record<string, string> = {};
+      let annotationForPopover: Annotation | null = null;
+      let abbreviation: string | null = null;
+      let icon: React.ElementType | null = null;
+      let labelForTitle: string | null = null;
+
+      // Check for pending connection start
+      if (isConnecting && pendingConnectionStart && start >= pendingConnectionStart.start && end <= pendingConnectionStart.end) {
+        segmentClasses += ` ${'bg-blue-300/50'}`; // Highlight for pending connection start
+        if (start === pendingConnectionStart.start && end === pendingConnectionStart.end) { // Exact match
+             dataAttributes['data-conn-marker-id'] = `pending-${pendingConnectionStart.start}-from`;
+        }
       }
-      const def = annotationDefinitions[ann.type];
-      const isPending = ann.id === 'pending-connection-start';
-      const colorClass = isPending ? 'bg-blue-300/50' : def.colorClass; 
+      
+      // Check for completed connections
+      connections.forEach(conn => {
+        if (start >= conn.from.start && end <= conn.from.end) {
+          // segmentClasses += ` ${annotationDefinitions.connection.colorClass}`; // Optional: style connection points
+           if (start === conn.from.start && end === conn.from.end) dataAttributes['data-conn-marker-id'] = `${conn.id}-from`;
+        }
+        if (start >= conn.to.start && end <= conn.to.end) {
+          // segmentClasses += ` ${annotationDefinitions.connection.colorClass}`; // Optional: style connection points
+          if (start === conn.to.start && end === conn.to.end) dataAttributes['data-conn-marker-id'] = `${conn.id}-to`;
+        }
+      });
 
-      const spanContent = (
-        <span className={`px-0.5 py-0.5 rounded relative group ${colorClass} cursor-pointer hover:brightness-110 transition-all `}>
-          {originalText.substring(ann.start, ann.end)}
-          {!isPending && (
-            <span
-              className={`ml-0.5 text-[0.6rem] font-bold p-[1px] px-[3px] rounded-sm align-super ${def.colorClass.replace('/30', '/60').replace('/40','/70')} text-black/70`}
-              title={def.label}
-            >
-              {def.abbreviation}
-            </span>
-          )}
-          {isPending && (
-            <span
-              className={`ml-0.5 text-[0.6rem] font-bold p-[1px] px-[3px] rounded-sm align-super bg-blue-500/70 text-white`}
-              title="Starting point of connection"
-            >
-              FROM
-            </span>
-          )}
-        </span>
-      );
+      // Check for annotations (highest priority if overlapping, or combine?)
+      // For simplicity, pick the first one that fully contains or starts at this segment
+      const applicableAnnotations = annotations.filter(ann => start >= ann.start && end <= ann.end);
+      if (applicableAnnotations.length > 0) {
+        // Prioritize longer annotations or decide on a merging strategy if complex overlaps needed
+        const currentAnn = applicableAnnotations.sort((a,b) => (b.end-b.start) - (a.end-a.start))[0];
+        annotationForPopover = currentAnn;
+        const def = annotationDefinitions[currentAnn.type];
+        segmentClasses += ` ${def.colorClass} cursor-pointer`;
+        abbreviation = def.abbreviation;
+        icon = def.icon;
+        labelForTitle = def.label;
+      }
+      
+      const spanKey = `segment-${start}-${end}`;
+      let spanContent = <span className={segmentClasses} {...dataAttributes}>{segmentText}</span>;
 
-      if (isPending) {
-        parts.push(React.cloneElement(spanContent, { key: ann.id }));
-      } else {
-         parts.push(
-          <Popover key={ann.id}>
+      if (abbreviation && labelForTitle && !dataAttributes['data-conn-marker-id']?.startsWith('pending')) { // Don't add abbreviation to pending markers
+         const def = annotationDefinitions[annotationForPopover!.type]; // annotationForPopover must exist if abbreviation is set
+         spanContent = (
+            <span className={`${segmentClasses} ${def.colorClass} cursor-pointer`} {...dataAttributes}>
+              {segmentText}
+              <span
+                className={`ml-0.5 text-[0.6rem] font-bold p-[1px] px-[3px] rounded-sm align-super ${def.colorClass.replace('/30', '/60').replace('/40','/70')} text-black/70`}
+                title={labelForTitle}
+              >
+                {abbreviation}
+              </span>
+            </span>
+         );
+      }
+
+
+      if (annotationForPopover && icon) {
+        const def = annotationDefinitions[annotationForPopover.type];
+        parts.push(
+          <Popover key={spanKey}>
             <PopoverTrigger asChild>{spanContent}</PopoverTrigger>
             <PopoverContent className="w-80 shadow-xl">
               <div className="grid gap-4">
@@ -388,40 +469,37 @@ export default function ActiveReaderCore() {
                     <h4 className="font-medium leading-none">{def.label}</h4>
                   </div>
                   <p className="text-sm text-muted-foreground break-words">
-                    Annotated: <span className="italic">"{ann.text}"</span>
+                    Annotated: <span className="italic">"{annotationForPopover.text}"</span>
                   </p>
                 </div>
                 <p className="text-sm text-muted-foreground italic">This annotation type does not support additional notes in this version.</p>
-                <Button variant="outline" size="sm" onClick={() => removeAnnotation(ann.id)} className="mt-2">
+                <Button variant="outline" size="sm" onClick={() => removeAnnotation(annotationForPopover!.id)} className="mt-2">
                   <Trash2 className="mr-2 h-4 w-4" /> Delete Annotation
                 </Button>
               </div>
             </PopoverContent>
           </Popover>
         );
+      } else {
+        parts.push(React.cloneElement(spanContent, {key: spanKey}));
       }
-      lastIndex = ann.end;
-    });
-
-    if (lastIndex < originalText.length) {
-      parts.push(<React.Fragment key={`text-trailing-${lastIndex}`}>{originalText.substring(lastIndex)}</React.Fragment>);
     }
     
     return (
         <>
-            {isConnecting && pendingConnectionStart && (
+            {isConnecting && ( // This status bar is for active connection process
                 <div className="mb-2 p-3 text-sm bg-blue-100 text-blue-800 rounded-md border border-blue-300 flex items-center justify-between shadow">
                     <div className='flex items-center'>
                         <Link2 className="h-5 w-5 mr-2 shrink-0 text-blue-600" />
                         <span className="font-medium">
-                            {currentSelection && currentSelection.text.trim() !== ""
+                            {currentSelection && currentSelection.text.trim() !== "" && pendingConnectionStart
                                 ? "Second point selected. Ready to connect."
-                                : "Select the second piece of text."
+                                : "Select the second piece of text to connect to."
                             }
                         </span>
                     </div>
                     <div className="flex items-center gap-2">
-                        {currentSelection && currentSelection.text.trim() !== "" && (
+                        {currentSelection && currentSelection.text.trim() !== "" && pendingConnectionStart && (
                             <Button 
                                 variant="outline" 
                                 size="sm" 
@@ -447,12 +525,36 @@ export default function ActiveReaderCore() {
                     </div>
                 </div>
             )}
-            <div ref={textDisplayRef} data-text-display-area className="whitespace-pre-wrap leading-relaxed selection:bg-blue-300 selection:text-blue-900">
-                {parts}
+            <div ref={textDisplayRef} data-text-display-area className="whitespace-pre-wrap leading-relaxed selection:bg-blue-300 selection:text-blue-900 relative">
+                 {/* SVG Overlay for lines - must be relative to this div */}
+                <svg 
+                    className="absolute top-0 left-0 w-full h-full pointer-events-none z-[5]" // z-index to be above text, below toolbar maybe
+                >
+                    {lineDrawData.map(line => (
+                        <line
+                            key={line.id}
+                            x1={line.x1}
+                            y1={line.y1}
+                            x2={line.x2}
+                            y2={line.y2}
+                            stroke="hsl(var(--primary))" // Use theme primary color
+                            strokeWidth="2"
+                            markerEnd="url(#arrowhead)" // Optional: if you define an arrowhead
+                        />
+                    ))}
+                    {/* Optional: Define arrowhead marker for lines */}
+                    {/* <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="hsl(var(--primary))" />
+                        </marker>
+                    </defs> */}
+                </svg>
+                {parts.map((part, index) => <React.Fragment key={index}>{part}</React.Fragment>)}
             </div>
         </>
     );
   };
+
 
   const fetchAiGuide = async () => {
     if (!originalText) {
@@ -571,20 +673,20 @@ export default function ActiveReaderCore() {
 
       {originalText && !isFileLoading && (
         <div className="grid md:grid-cols-3 gap-6">
-          <Card className="md:col-span-2 shadow-xl relative">
+          <Card className="md:col-span-2 shadow-xl relative"> {/* Added relative for SVG positioning */}
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Edit3 className="h-6 w-6 text-primary" />
                 <CardTitle>Active Reading Space</CardTitle>
               </div>
-              <CardDescription>Select text to apply an annotation. For connections, click the <Link2 className="inline h-4 w-4"/> tool, select the first text, then select the second text using the status bar controls.
+              <CardDescription>Select text to apply an annotation. For connections, click the <Link2 className="inline h-4 w-4"/> tool, select the first text, then select the second text using the status bar controls. Lines will appear for completed connections.
               </CardDescription>
             </CardHeader>
-            <CardContent className="prose max-w-none min-h-[300px] p-6 text-base relative">
+            <CardContent className="prose max-w-none min-h-[300px] p-6 text-base relative"> {/* Added relative for SVG positioning parent */}
               {renderTextWithAnnotations()}
               {showAnnotationToolbar && currentSelection && currentSelection.text.trim() !== "" && !isConnecting && (
                 <div
-                  className="absolute bg-card border border-border rounded-md shadow-lg p-1 flex flex-wrap gap-1 z-10"
+                  className="absolute bg-card border border-border rounded-md shadow-lg p-1 flex flex-wrap gap-1 z-10" // z-10 to be above SVG lines
                   style={{
                     left: Math.max(0, toolbarPosition.x),
                     top: Math.max(0, toolbarPosition.y),
@@ -799,3 +901,4 @@ export default function ActiveReaderCore() {
     </div>
   );
 }
+
