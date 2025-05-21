@@ -25,9 +25,9 @@ const annotationDefinitions = {
   'main-idea': { label: 'Main Idea', abbreviation: 'MI', colorClass: 'bg-blue-500/30', icon: BookMarked, requiresNote: false, description: "Identify a central point or thesis." },
   'key-term': { label: 'Key Term', abbreviation: 'KT', colorClass: 'bg-green-500/30', icon: KeyRound, requiresNote: false, description: "Mark an important vocabulary word or concept." },
   evidence: { label: 'Evidence', abbreviation: 'EV', colorClass: 'bg-indigo-500/30', icon: FileText, requiresNote: false, description: "Point to supporting details or examples." },
-  question: { label: 'Question', abbreviation: 'Q', colorClass: 'bg-purple-500/30', icon: HelpCircle, requiresNote: true, description: "Pose a question about the text." },
-  connection: { label: 'Connection', abbreviation: 'CON', colorClass: 'bg-orange-500/30', icon: Link2, requiresNote: true, description: "Link to self, other texts, or the world." },
-  'custom-note': { label: 'Note', abbreviation: 'N', colorClass: 'bg-gray-500/30', icon: StickyNote, requiresNote: true, description: "Add a general observation or comment." },
+  question: { label: 'Question', abbreviation: 'Q', colorClass: 'bg-purple-500/30', icon: HelpCircle, requiresNote: false, description: "Mark a point of inquiry in the text." },
+  connection: { label: 'Connection', abbreviation: 'CON', colorClass: 'bg-orange-500/30', icon: Link2, requiresNote: false, description: "Mark a connection to self, other texts, or the world." },
+  'custom-note': { label: 'Note', abbreviation: 'N', colorClass: 'bg-gray-500/30', icon: StickyNote, requiresNote: false, description: "Mark a general observation or comment." },
 } as const;
 
 type AnnotationDisplayType = keyof typeof annotationDefinitions;
@@ -38,7 +38,7 @@ interface Annotation {
   end: number;
   text: string;
   type: AnnotationDisplayType;
-  note?: string;
+  // No 'note' property needed anymore for this simplified version
 }
 
 interface SelectionRange {
@@ -47,24 +47,12 @@ interface SelectionRange {
   text: string;
 }
 
-type EditingAnnotationPayload = {
-  id: 'new-note';
-  start: number;
-  end: number;
-  text: string;
-  type: AnnotationDisplayType;
-};
-
-
 export default function ActiveReaderCore() {
   const [originalText, setOriginalText] = useState<string>("");
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [currentSelection, setCurrentSelection] = useState<SelectionRange | null>(null);
   const [showAnnotationToolbar, setShowAnnotationToolbar] = useState(false);
   const [toolbarPosition, setToolbarPosition] = useState({ x: 0, y: 0, screenX: 0, screenY: 0 });
-  const [annotationNote, setAnnotationNote] = useState("");
-  const [editingAnnotation, setEditingAnnotation] = useState<EditingAnnotationPayload | null>(null);
-
 
   const [summaryText, setSummaryText] = useState<string>("");
   const [aiAnnotationGuide, setAiAnnotationGuide] = useState<string | null>(null);
@@ -84,12 +72,6 @@ export default function ActiveReaderCore() {
     GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsVersion}/pdf.worker.min.mjs`;
   }, []);
 
-  // Log editingAnnotation state for debugging
-  useEffect(() => {
-    console.log("Current editingAnnotation state:", editingAnnotation);
-  }, [editingAnnotation]);
-
-
   const resetAppStateForNewText = () => {
     setAnnotations([]);
     setSummaryText("");
@@ -98,8 +80,6 @@ export default function ActiveReaderCore() {
     setAiAnnotationFeedback(null);
     setCurrentSelection(null);
     setShowAnnotationToolbar(false);
-    setEditingAnnotation(null);
-    setAnnotationNote("");
   };
 
   const handleTextPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -172,10 +152,8 @@ export default function ActiveReaderCore() {
 
       if (!container.contains(range.commonAncestorContainer) ||
           (range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE && !(range.commonAncestorContainer as Element).closest('[data-text-display-area]'))) {
-        if (!editingAnnotation) {
-            setShowAnnotationToolbar(false);
-            setCurrentSelection(null);
-        }
+        setShowAnnotationToolbar(false);
+        setCurrentSelection(null);
         return;
       }
 
@@ -190,31 +168,20 @@ export default function ActiveReaderCore() {
 
         const rect = range.getBoundingClientRect();
         const containerRect = container.getBoundingClientRect();
-        const newToolbarPosition = {
+        setToolbarPosition({
           x: rect.left - containerRect.left + rect.width / 2,
           y: rect.top - containerRect.top - 10,
           screenX: rect.left + window.scrollX + rect.width / 2,
           screenY: rect.top + window.scrollY
-        };
-        setToolbarPosition(newToolbarPosition);
-        // console.log("Toolbar position set for selection:", newToolbarPosition);
-
-
-        if (!editingAnnotation) {
-            setShowAnnotationToolbar(true);
-        }
+        });
+        setShowAnnotationToolbar(true);
       } else {
-         if (!editingAnnotation) {
-            setShowAnnotationToolbar(false);
-            setCurrentSelection(null);
-         }
-      }
-
-    } else {
-      if (!editingAnnotation) {
         setShowAnnotationToolbar(false);
         setCurrentSelection(null);
       }
+    } else {
+      setShowAnnotationToolbar(false);
+      setCurrentSelection(null);
     }
   };
 
@@ -235,19 +202,17 @@ export default function ActiveReaderCore() {
           textDisplayArea.removeEventListener('mouseup', debouncedHandleSelection);
       }
     };
-  }, [originalText, editingAnnotation, isFileLoading]);
+  }, [originalText, isFileLoading]);
 
-  const addAnnotation = (type: AnnotationDisplayType, noteText?: string) => {
-    const selectionToAnnotate = editingAnnotation || currentSelection;
-    if (!selectionToAnnotate || selectionToAnnotate.text.trim() === "") return;
+  const addAnnotation = (type: AnnotationDisplayType) => {
+    if (!currentSelection || currentSelection.text.trim() === "") return;
 
     const newAnnotation: Annotation = {
       id: Date.now().toString(),
-      start: selectionToAnnotate.start,
-      end: selectionToAnnotate.end,
-      text: selectionToAnnotate.text,
+      start: currentSelection.start,
+      end: currentSelection.end,
+      text: currentSelection.text,
       type,
-      note: noteText,
     };
     setAnnotations(prev => [...prev, newAnnotation].sort((a,b) => a.start - b.start));
 
@@ -260,70 +225,12 @@ export default function ActiveReaderCore() {
 
     setShowAnnotationToolbar(false);
     setCurrentSelection(null);
-    setAnnotationNote("");
-    setEditingAnnotation(null);
   };
 
   const handleToolbarAction = (type: AnnotationDisplayType) => {
     if (!currentSelection || currentSelection.text.trim() === "") return;
-
-    const def = annotationDefinitions[type];
-    if (def.requiresNote) {
-      setAnnotationNote("");
-      const newEditingAnnotationPayload: EditingAnnotationPayload = {
-        id: 'new-note' as const, 
-        start: currentSelection.start,
-        end: currentSelection.end,
-        text: currentSelection.text,
-        type: type
-      };
-      setEditingAnnotation(newEditingAnnotationPayload);
-      console.log("Setting editingAnnotation in handleToolbarAction:", newEditingAnnotationPayload);
-      console.log("Toolbar position at time of setting editingAnnotation:", toolbarPosition);
-      setShowAnnotationToolbar(false);
-    } else {
-      addAnnotation(type);
-    }
+    addAnnotation(type);
   };
-
-  const stableHandleCancelAnnotationNote = useCallback(() => {
-    console.log("Cancelling annotation note. Current editingAnnotation before cancel (from stable func):", editingAnnotation); // This will show editingAnnotation from closure
-    setEditingAnnotation(null);
-    setAnnotationNote("");
-    setShowAnnotationToolbar(false);
-    setCurrentSelection(null);
-  }, []); // No deps needed if it always sets to null and resets
-
-
-  const handleSaveAnnotationNote = useCallback(() => {
-    if (editingAnnotation) {
-      const noteText = annotationNote.trim();
-      const def = annotationDefinitions[editingAnnotation.type];
-
-      if (def.requiresNote && !noteText) {
-        toast({
-          title: "Note Required",
-          description: `A note is required for a "${def.label}" annotation. Please enter some text or cancel.`,
-          variant: "destructive"
-        });
-        return;
-      }
-      addAnnotation(editingAnnotation.type, noteText ? noteText : undefined);
-      // addAnnotation internally calls setEditingAnnotation(null)
-    } else {
-      // This case should ideally not be reached if UI flow is correct
-      stableHandleCancelAnnotationNote();
-    }
-  }, [editingAnnotation, annotationNote, toast, stableHandleCancelAnnotationNote]);
-
-
-  const onPopoverOpenChange = useCallback((isOpen: boolean) => {
-    console.log("Popover onOpenChange triggered. isOpen:", isOpen, "Current editingAnnotation:", editingAnnotation);
-    if (!isOpen && editingAnnotation) { 
-      stableHandleCancelAnnotationNote();
-    }
-  }, [editingAnnotation, stableHandleCancelAnnotationNote]);
-
 
   const removeAnnotation = (id: string) => {
     setAnnotations(prev => prev.filter(ann => ann.id !== id));
@@ -368,14 +275,7 @@ export default function ActiveReaderCore() {
                   Annotated: <span className="italic">"{ann.text}"</span>
                 </p>
               </div>
-              {ann.note ? (
-                <div className="space-y-1">
-                  <p className="text-sm font-medium">Note:</p>
-                  <p className="text-sm bg-secondary/50 p-2 rounded whitespace-pre-wrap break-words">{ann.note}</p>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground italic">No additional note for this annotation.</p>
-              )}
+              <p className="text-sm text-muted-foreground italic">This annotation type does not support additional notes in this version.</p>
               <Button variant="outline" size="sm" onClick={() => removeAnnotation(ann.id)} className="mt-2">
                 <Trash2 className="mr-2 h-4 w-4" /> Delete Annotation
               </Button>
@@ -443,7 +343,6 @@ export default function ActiveReaderCore() {
       const annotationDetailsForAI = annotations.map(ann => ({
         text: ann.text,
         type: ann.type,
-        note: ann.note || undefined,
       }));
       const result = await getAiAnnotationFeedbackAction({ originalText, annotations: annotationDetailsForAI });
       setAiAnnotationFeedback(result.feedback);
@@ -514,7 +413,7 @@ export default function ActiveReaderCore() {
             </CardHeader>
             <CardContent className="prose max-w-none min-h-[300px] p-6 text-base relative">
               {renderTextWithAnnotations()}
-              {showAnnotationToolbar && currentSelection && currentSelection.text.trim() !== "" && !editingAnnotation && (
+              {showAnnotationToolbar && currentSelection && currentSelection.text.trim() !== "" && (
                 <div
                   className="absolute bg-card border border-border rounded-md shadow-lg p-1 flex flex-wrap gap-1 z-10"
                   style={{
@@ -539,52 +438,6 @@ export default function ActiveReaderCore() {
                   ))}
                 </div>
               )}
-              <Popover
-                open={!!editingAnnotation}
-                onOpenChange={onPopoverOpenChange}
-              >
-                <PopoverTrigger asChild>
-                  {/* This span is an empty, invisible trigger. When open is controlled, it's mostly a placeholder for Radix. */}
-                  <span />
-                </PopoverTrigger>
-                {editingAnnotation && ( // Conditionally render PopoverContent
-                  <PopoverContent
-                    className="w-64 p-4 shadow-xl border-2 border-red-500 bg-yellow-200 text-black" // TEMPORARY: Make it super obvious
-                    style={{ // TEMPORARY: Fixed position for debugging
-                        position: 'fixed',
-                        left: '50%',
-                        top: '50%',
-                        transform: 'translate(-50%, -50%)',
-                        zIndex: 1000, // Ensure it's on top
-                    }}
-                    // Original dynamic positioning (commented out for debugging phase)
-                    // style={{
-                    //     position: 'fixed',
-                    //     left: `${toolbarPosition.screenX}px`,
-                    //     top: `${toolbarPosition.screenY - 10}px`,
-                    //     transform: 'translate(-50%, -100%)',
-                    //     zIndex: 20,
-                    // }}
-                    onOpenAutoFocus={(e) => e.preventDefault()} // Important for programmatic control + autoFocus inside
-                  >
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium">Add Note for {annotationDefinitions[editingAnnotation.type].label}</p>
-                      <Textarea
-                        placeholder="Type your note..."
-                        value={annotationNote}
-                        onChange={(e) => setAnnotationNote(e.target.value)}
-                        rows={3}
-                        autoFocus // autoFocus the textarea
-                        className="bg-white text-black"
-                      />
-                      <div className="flex justify-end gap-2">
-                        <Button variant="ghost" size="sm" onClick={stableHandleCancelAnnotationNote}>Cancel</Button>
-                        <Button size="sm" onClick={handleSaveAnnotationNote}>Save</Button>
-                      </div>
-                    </div>
-                  </PopoverContent>
-                )}
-              </Popover>
             </CardContent>
           </Card>
 
@@ -715,7 +568,7 @@ export default function ActiveReaderCore() {
                                 <def.icon className={`h-4 w-4 shrink-0 ${def.colorClass.replace('bg-', 'text-').replace('/30', '-700').replace('/40','-700')}`} />
                                 <p className={`font-semibold text-sm truncate`}>{def.label}: <span className="italic font-normal">"{ann.text}"</span></p>
                               </div>
-                              {ann.note && <p className="text-xs text-muted-foreground mt-1 pl-5 whitespace-pre-wrap break-words">Note: {ann.note}</p>}
+                              {/* No note to display for this simplified version */}
                             </div>
                             <Button variant="ghost" size="sm" onClick={() => removeAnnotation(ann.id)} className="text-destructive hover:text-destructive/80 p-1 h-auto ml-2 shrink-0">
                               <Trash2 className="h-4 w-4" />
@@ -740,3 +593,4 @@ export default function ActiveReaderCore() {
     </div>
   );
 }
+
