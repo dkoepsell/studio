@@ -5,7 +5,7 @@
 - Text Import: Import text from PDF or DOC files.
 - AI Annotation Guide: Use AI to demonstrate ideal annotation strategies for active reading. The AI should function as a tool to augment the users understanding of the text.
 - Interactive Annotation: Allow students to highlight, annotate, and save text selections.
-- Argument Summarization: Enable students to write and save summaries of main arguments within the text.
+- AI Annotation Guide: Provide an AI-powered annotation guide only after a student has attempted to annotate the text and explicitly requests it. Before this, the application should provide a legend for annotation types and basic guidance on using the annotation tools.
 - Performance Feedback: Provide tailored tips to improve annotation and summarization skills based on AI analysis of user's attempts.
 
 ## Style Guidelines:

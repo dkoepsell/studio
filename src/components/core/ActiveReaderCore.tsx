@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -8,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Lightbulb, Edit3, MessageSquare, Sparkles, FileText, Trash2, Highlighter, StickyNote,
-  CheckCircle, AlertTriangle, MessageCircleQuestion, KeyRound, BookMarked, Link2, HelpCircle, UploadCloud, Loader2
+  CheckCircle, AlertTriangle, MessageCircleQuestion, KeyRound, BookMarked, Link2, HelpCircle, UploadCloud, Loader2, Info, ListChecks
 } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { getAiAnnotationGuideAction, getAiSummaryFeedbackAction, getAiAnnotationFeedbackAction } from '@/app/actions';
@@ -21,13 +20,13 @@ import type { PDFDocumentProxy } from 'pdfjs-dist';
 
 // Define annotation types with their properties
 const annotationDefinitions = {
-  highlight: { label: 'Highlight', abbreviation: 'HL', colorClass: 'bg-yellow-400/40', icon: Highlighter, requiresNote: false },
-  'main-idea': { label: 'Main Idea', abbreviation: 'MI', colorClass: 'bg-blue-500/30', icon: BookMarked, requiresNote: false },
-  'key-term': { label: 'Key Term', abbreviation: 'KT', colorClass: 'bg-green-500/30', icon: KeyRound, requiresNote: false },
-  evidence: { label: 'Evidence', abbreviation: 'EV', colorClass: 'bg-indigo-500/30', icon: FileText, requiresNote: false },
-  question: { label: 'Question', abbreviation: 'Q', colorClass: 'bg-purple-500/30', icon: HelpCircle, requiresNote: true },
-  connection: { label: 'Connection', abbreviation: 'CON', colorClass: 'bg-orange-500/30', icon: Link2, requiresNote: true },
-  'custom-note': { label: 'Note', abbreviation: 'N', colorClass: 'bg-gray-500/30', icon: StickyNote, requiresNote: true },
+  highlight: { label: 'Highlight', abbreviation: 'HL', colorClass: 'bg-yellow-400/40', icon: Highlighter, requiresNote: false, description: "Emphasize important text." },
+  'main-idea': { label: 'Main Idea', abbreviation: 'MI', colorClass: 'bg-blue-500/30', icon: BookMarked, requiresNote: false, description: "Identify a central point or thesis." },
+  'key-term': { label: 'Key Term', abbreviation: 'KT', colorClass: 'bg-green-500/30', icon: KeyRound, requiresNote: false, description: "Mark an important vocabulary word or concept." },
+  evidence: { label: 'Evidence', abbreviation: 'EV', colorClass: 'bg-indigo-500/30', icon: FileText, requiresNote: false, description: "Point to supporting details or examples." },
+  question: { label: 'Question', abbreviation: 'Q', colorClass: 'bg-purple-500/30', icon: HelpCircle, requiresNote: true, description: "Pose a question about the text." },
+  connection: { label: 'Connection', abbreviation: 'CON', colorClass: 'bg-orange-500/30', icon: Link2, requiresNote: true, description: "Link to self, other texts, or the world." },
+  'custom-note': { label: 'Note', abbreviation: 'N', colorClass: 'bg-gray-500/30', icon: StickyNote, requiresNote: true, description: "Add a general observation or comment." },
 } as const;
 
 type AnnotationDisplayType = keyof typeof annotationDefinitions;
@@ -82,9 +81,6 @@ export default function ActiveReaderCore() {
   const { toast } = useToast();
 
   useEffect(() => {
-    // Configure PDF.js worker. Using a CDN for simplicity.
-    // For local hosting, copy 'pdf.worker.min.mjs' from 'node_modules/pdfjs-dist/build/' to '/public'
-    // and set GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
     GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsVersion}/pdf.worker.min.mjs`;
   }, []);
 
@@ -139,7 +135,7 @@ export default function ActiveReaderCore() {
           for (let i = 1; i <= pdf.numPages; i++) {
             const page = await pdf.getPage(i);
             const textContent = await page.getTextContent();
-            fullText += textContent.items.map((item: any) => item.str).join(" ") + "\n"; // basic text extraction
+            fullText += textContent.items.map((item: any) => item.str).join(" ") + "\n";
           }
           setOriginalText(fullText);
           toast({ title: "PDF Loaded", description: `${file.name} has been processed and text extracted.` });
@@ -154,7 +150,6 @@ export default function ActiveReaderCore() {
         setIsFileLoading(false);
       }
       
-      // Reset file input value to allow re-uploading the same file if needed
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -365,6 +360,10 @@ export default function ActiveReaderCore() {
       toast({ title: "No Text Provided", description: "Please paste or upload some text first.", variant: "destructive" });
       return;
     }
+    if (annotations.length === 0) {
+      toast({ title: "Make Annotations First", description: "Please make at least one annotation before requesting an AI guide.", variant: "destructive" });
+      return;
+    }
     setIsLoadingAiGuide(true);
     setAiAnnotationGuide(null);
     try {
@@ -547,41 +546,47 @@ export default function ActiveReaderCore() {
           </Card>
 
           <div className="space-y-6 md:col-span-1">
-            <Tabs defaultValue="ai-guide" className="w-full">
+            <Card className="shadow-lg">
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <ListChecks className="h-6 w-6 text-primary" />
+                  <CardTitle className="text-lg font-medium">Annotation Key &amp; Tips</CardTitle>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div>
+                  <h4 className="font-semibold mb-2 text-base">Annotation Legend:</h4>
+                  <ul className="space-y-1.5 text-sm">
+                    {Object.entries(annotationDefinitions).map(([key, def]) => (
+                      <li key={key} className="flex items-center gap-2">
+                        <def.icon className={`h-4 w-4 shrink-0 ${def.colorClass.replace('bg-', 'text-').replace('/30', '-700').replace('/40', '-700')}`} />
+                        <span className={`w-3 h-3 rounded-sm shrink-0 ${def.colorClass.replace('/30', '/80').replace('/40', '/80')}`}></span>
+                        <span className="font-medium">{def.label} ({def.abbreviation}):</span>
+                        <span className="text-muted-foreground text-xs">{def.description}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <h4 className="font-semibold mb-2 text-base">Active Reading Tips:</h4>
+                  <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground">
+                    <li>Engage actively to improve understanding and retention.</li>
+                    <li>Mark main ideas, key terms, and supporting evidence.</li>
+                    <li>Note down questions that arise as you read.</li>
+                    <li>Make connections to your own experiences or other texts.</li>
+                    <li>Your annotations should create a dialogue with the material.</li>
+                  </ul>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Tabs defaultValue="summary" className="w-full">
               <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="summary"><MessageSquare className="mr-1 h-4 w-4 inline-block"/>Summary</TabsTrigger>
                 <TabsTrigger value="ai-guide"><Lightbulb className="mr-1 h-4 w-4 inline-block"/>Guide</TabsTrigger>
                 <TabsTrigger value="ann-feedback"><MessageCircleQuestion className="mr-1 h-4 w-4 inline-block"/>Ann. Fbk</TabsTrigger>
-                <TabsTrigger value="summary"><MessageSquare className="mr-1 h-4 w-4 inline-block"/>Summary</TabsTrigger>
                 <TabsTrigger value="sum-feedback"><Sparkles className="mr-1 h-4 w-4 inline-block"/>Sum. Fbk</TabsTrigger>
               </TabsList>
-              <TabsContent value="ai-guide">
-                <AiHelperCard
-                  title="AI Annotation Guide"
-                  icon={Lightbulb}
-                  content={aiAnnotationGuide}
-                  isLoading={isLoadingAiGuide}
-                  actionButton={
-                    <Button onClick={fetchAiGuide} disabled={isLoadingAiGuide || !originalText} size="sm">
-                      {isLoadingAiGuide ? "Generating..." : "Get Guide"}
-                    </Button>
-                  }
-                  placeholderText="Click 'Get Guide' to see AI-suggested annotations for the text."
-                />
-              </TabsContent>
-              <TabsContent value="ann-feedback">
-                <AiHelperCard
-                  title="AI Annotation Feedback"
-                  icon={MessageCircleQuestion}
-                  content={aiAnnotationFeedback}
-                  isLoading={isLoadingAiAnnotationFeedback}
-                  actionButton={
-                    <Button onClick={fetchAiAnnotationFeedback} disabled={isLoadingAiAnnotationFeedback || !originalText || annotations.length === 0} size="sm">
-                      {isLoadingAiAnnotationFeedback ? "Analyzing..." : "Get Feedback"}
-                    </Button>
-                  }
-                  placeholderText="Make some annotations on the text, then click 'Get Feedback' to see how you did."
-                />
-              </TabsContent>
               <TabsContent value="summary">
                 <Card className="shadow-lg">
                   <CardHeader>
@@ -601,6 +606,34 @@ export default function ActiveReaderCore() {
                     />
                   </CardContent>
                 </Card>
+              </TabsContent>
+              <TabsContent value="ai-guide">
+                <AiHelperCard
+                  title="AI Annotation Guide"
+                  icon={Lightbulb}
+                  content={aiAnnotationGuide}
+                  isLoading={isLoadingAiGuide}
+                  actionButton={
+                    <Button onClick={fetchAiGuide} disabled={isLoadingAiGuide || !originalText || annotations.length === 0} size="sm">
+                      {isLoadingAiGuide ? "Generating..." : "Get Guide"}
+                    </Button>
+                  }
+                  placeholderText={annotations.length === 0 ? "Make some annotations first, then click 'Get Guide'." : "Click 'Get Guide' to see AI-suggested annotations for the text."}
+                />
+              </TabsContent>
+              <TabsContent value="ann-feedback">
+                <AiHelperCard
+                  title="AI Annotation Feedback"
+                  icon={MessageCircleQuestion}
+                  content={aiAnnotationFeedback}
+                  isLoading={isLoadingAiAnnotationFeedback}
+                  actionButton={
+                    <Button onClick={fetchAiAnnotationFeedback} disabled={isLoadingAiAnnotationFeedback || !originalText || annotations.length === 0} size="sm">
+                      {isLoadingAiAnnotationFeedback ? "Analyzing..." : "Get Feedback"}
+                    </Button>
+                  }
+                  placeholderText="Make some annotations on the text, then click 'Get Feedback' to see how you did."
+                />
               </TabsContent>
               <TabsContent value="sum-feedback">
                 <AiHelperCard
@@ -660,3 +693,4 @@ export default function ActiveReaderCore() {
     </div>
   );
 }
+
