@@ -1,7 +1,7 @@
 
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -193,8 +193,8 @@ export default function ActiveReaderCore() {
         const newToolbarPosition = {
           x: rect.left - containerRect.left + rect.width / 2,
           y: rect.top - containerRect.top - 10,
-          screenX: rect.left + rect.width / 2,
-          screenY: rect.top
+          screenX: rect.left + window.scrollX + rect.width / 2,
+          screenY: rect.top + window.scrollY
         };
         setToolbarPosition(newToolbarPosition);
         // console.log("Toolbar position set for selection:", newToolbarPosition);
@@ -270,13 +270,15 @@ export default function ActiveReaderCore() {
     const def = annotationDefinitions[type];
     if (def.requiresNote) {
       setAnnotationNote("");
-      const newEditingAnnotation = {
+      const newEditingAnnotationPayload: EditingAnnotationPayload = {
         id: 'new-note' as const, 
-        ...currentSelection,
+        start: currentSelection.start,
+        end: currentSelection.end,
+        text: currentSelection.text,
         type: type
       };
-      setEditingAnnotation(newEditingAnnotation);
-      console.log("Setting editingAnnotation in handleToolbarAction:", newEditingAnnotation);
+      setEditingAnnotation(newEditingAnnotationPayload);
+      console.log("Setting editingAnnotation in handleToolbarAction:", newEditingAnnotationPayload);
       console.log("Toolbar position at time of setting editingAnnotation:", toolbarPosition);
       setShowAnnotationToolbar(false);
     } else {
@@ -284,7 +286,16 @@ export default function ActiveReaderCore() {
     }
   };
 
-  const handleSaveAnnotationNote = () => {
+  const stableHandleCancelAnnotationNote = useCallback(() => {
+    console.log("Cancelling annotation note. Current editingAnnotation before cancel (from stable func):", editingAnnotation); // This will show editingAnnotation from closure
+    setEditingAnnotation(null);
+    setAnnotationNote("");
+    setShowAnnotationToolbar(false);
+    setCurrentSelection(null);
+  }, []); // No deps needed if it always sets to null and resets
+
+
+  const handleSaveAnnotationNote = useCallback(() => {
     if (editingAnnotation) {
       const noteText = annotationNote.trim();
       const def = annotationDefinitions[editingAnnotation.type];
@@ -298,21 +309,20 @@ export default function ActiveReaderCore() {
         return;
       }
       addAnnotation(editingAnnotation.type, noteText ? noteText : undefined);
+      // addAnnotation internally calls setEditingAnnotation(null)
     } else {
-      setEditingAnnotation(null);
-      setShowAnnotationToolbar(false);
-      setCurrentSelection(null);
-      setAnnotationNote("");
+      // This case should ideally not be reached if UI flow is correct
+      stableHandleCancelAnnotationNote();
     }
-  };
+  }, [editingAnnotation, annotationNote, toast, stableHandleCancelAnnotationNote]);
 
-  const handleCancelAnnotationNote = () => {
-    console.log("Cancelling annotation note. Current editingAnnotation before cancel:", editingAnnotation);
-    setEditingAnnotation(null);
-    setAnnotationNote("");
-    setShowAnnotationToolbar(false);
-    setCurrentSelection(null); // Ensure selection is also cleared
-  };
+
+  const onPopoverOpenChange = useCallback((isOpen: boolean) => {
+    console.log("Popover onOpenChange triggered. isOpen:", isOpen, "Current editingAnnotation:", editingAnnotation);
+    if (!isOpen && editingAnnotation) { 
+      stableHandleCancelAnnotationNote();
+    }
+  }, [editingAnnotation, stableHandleCancelAnnotationNote]);
 
 
   const removeAnnotation = (id: string) => {
@@ -531,17 +541,13 @@ export default function ActiveReaderCore() {
               )}
               <Popover
                 open={!!editingAnnotation}
-                onOpenChange={(isOpen) => {
-                  console.log("Popover onOpenChange triggered. isOpen:", isOpen, "Current editingAnnotation:", editingAnnotation);
-                  if (!isOpen && editingAnnotation) { // only cancel if it's an external close and editingAnnotation is set
-                        handleCancelAnnotationNote();
-                  }
-                }}
+                onOpenChange={onPopoverOpenChange}
               >
                 <PopoverTrigger asChild>
+                  {/* This span is an empty, invisible trigger. When open is controlled, it's mostly a placeholder for Radix. */}
                   <span />
                 </PopoverTrigger>
-                {editingAnnotation && (
+                {editingAnnotation && ( // Conditionally render PopoverContent
                   <PopoverContent
                     className="w-64 p-4 shadow-xl border-2 border-red-500 bg-yellow-200 text-black" // TEMPORARY: Make it super obvious
                     style={{ // TEMPORARY: Fixed position for debugging
@@ -559,8 +565,7 @@ export default function ActiveReaderCore() {
                     //     transform: 'translate(-50%, -100%)',
                     //     zIndex: 20,
                     // }}
-                    onOpenAutoFocus={(e) => e.preventDefault()}
-                    // onPointerDownOutside={handleCancelAnnotationNote} // Managed by onOpenChange for external closes
+                    onOpenAutoFocus={(e) => e.preventDefault()} // Important for programmatic control + autoFocus inside
                   >
                     <div className="space-y-2">
                       <p className="text-sm font-medium">Add Note for {annotationDefinitions[editingAnnotation.type].label}</p>
@@ -569,11 +574,11 @@ export default function ActiveReaderCore() {
                         value={annotationNote}
                         onChange={(e) => setAnnotationNote(e.target.value)}
                         rows={3}
-                        autoFocus
+                        autoFocus // autoFocus the textarea
                         className="bg-white text-black"
                       />
                       <div className="flex justify-end gap-2">
-                        <Button variant="ghost" size="sm" onClick={handleCancelAnnotationNote}>Cancel</Button>
+                        <Button variant="ghost" size="sm" onClick={stableHandleCancelAnnotationNote}>Cancel</Button>
                         <Button size="sm" onClick={handleSaveAnnotationNote}>Save</Button>
                       </div>
                     </div>
@@ -735,6 +740,3 @@ export default function ActiveReaderCore() {
     </div>
   );
 }
-
-
-    
