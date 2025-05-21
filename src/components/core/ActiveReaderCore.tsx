@@ -86,15 +86,15 @@ export default function ActiveReaderCore() {
 
   const resetAppStateForNewText = () => {
     setAnnotations([]);
-    setConnections([]); // Reset connections
+    setConnections([]); 
     setSummaryText("");
     setAiAnnotationGuide(null);
     setAiSummaryFeedback(null);
     setAiAnnotationFeedback(null);
     setCurrentSelection(null);
     setShowAnnotationToolbar(false);
-    setIsConnecting(false); // Reset connection state
-    setPendingConnectionStart(null); // Reset pending connection
+    setIsConnecting(false); 
+    setPendingConnectionStart(null); 
   };
 
   const handleTextPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -158,17 +158,20 @@ export default function ActiveReaderCore() {
     }
   };
 
-  const handleTextSelection = () => {
+  const handleTextSelection = useCallback(() => {
     if (!textDisplayRef.current || isFileLoading) return;
     const selection = window.getSelection();
+
     if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
       const range = selection.getRangeAt(0);
       const container = textDisplayRef.current;
 
       if (!container.contains(range.commonAncestorContainer) ||
           (range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE && !(range.commonAncestorContainer as Element).closest('[data-text-display-area]'))) {
-        setShowAnnotationToolbar(false);
-        setCurrentSelection(null);
+        if (!isConnecting) { // Only hide toolbar if not actively connecting
+          setShowAnnotationToolbar(false);
+          setCurrentSelection(null);
+        }
         return;
       }
 
@@ -178,54 +181,57 @@ export default function ActiveReaderCore() {
       const start = preSelectionRange.toString().length;
       const end = start + range.toString().length;
 
-      if (start >= 0 && end > start && range.toString().trim() !== "") { // Ensure end > start
+      if (start >= 0 && end > start && range.toString().trim() !== "") {
         setCurrentSelection({ start, end, text: range.toString() });
-
-        const rect = range.getBoundingClientRect();
-        const containerRect = container.getBoundingClientRect();
-        setToolbarPosition({
-          x: rect.left - containerRect.left + rect.width / 2,
-          y: rect.top - containerRect.top - 10,
-          screenX: rect.left + window.scrollX + rect.width / 2,
-          screenY: rect.top + window.scrollY
-        });
         if (!isConnecting) { // Only show toolbar if not in the middle of a connection
-             setShowAnnotationToolbar(true);
+          const rect = range.getBoundingClientRect();
+          const containerRect = container.getBoundingClientRect();
+          setToolbarPosition({
+            x: rect.left - containerRect.left + rect.width / 2,
+            y: rect.top - containerRect.top - 10,
+            screenX: rect.left + window.scrollX + rect.width / 2,
+            screenY: rect.top + window.scrollY
+          });
+          setShowAnnotationToolbar(true);
+        } else {
+             setShowAnnotationToolbar(false); // Ensure toolbar is hidden when selecting 'to' point
         }
-      } else {
+      } else { // Invalid selection
+        if (!isConnecting) {
+          setShowAnnotationToolbar(false);
+          setCurrentSelection(null);
+        }
+      }
+    } else { // No selection or selection collapsed
+      if (!isConnecting) {
         setShowAnnotationToolbar(false);
         setCurrentSelection(null);
       }
-    } else {
-      setShowAnnotationToolbar(false);
-      // If user clicks away and deselects, and was in connecting mode, cancel it
-      if (isConnecting && pendingConnectionStart) {
-        // Don't cancel if they just selected the first point
-      } else if (isConnecting) {
-         // Consider if clicking away should cancel an initiated connection
-      }
-      setCurrentSelection(null);
     }
-  };
+  }, [isConnecting, isFileLoading]);
+
 
   useEffect(() => {
     const textDisplayArea = textDisplayRef.current;
     if (!textDisplayArea || isFileLoading) return;
 
+    // Using a longer debounce to see if it helps with selection stability
     const debouncedHandleSelection = () => {
-        setTimeout(handleTextSelection, 50);
+        setTimeout(handleTextSelection, 100);
     }
 
     document.addEventListener('selectionchange', debouncedHandleSelection);
+    // `mouseup` might be more reliable for final selection state
     textDisplayArea.addEventListener('mouseup', debouncedHandleSelection);
+
 
     return () => {
       document.removeEventListener('selectionchange', debouncedHandleSelection);
       if (textDisplayArea) {
-          textDisplayArea.removeEventListener('mouseup', debouncedHandleSelection);
+        textDisplayArea.removeEventListener('mouseup', debouncedHandleSelection);
       }
     };
-  }, [originalText, isFileLoading, isConnecting, pendingConnectionStart]);
+  }, [originalText, isFileLoading, handleTextSelection]); // handleTextSelection is now memoized
 
 
   const addAnnotation = (type: AnnotationDisplayType) => {
@@ -253,19 +259,31 @@ export default function ActiveReaderCore() {
 
   const handleToolbarAction = (type: AnnotationDisplayType) => {
     if (!currentSelection || currentSelection.text.trim() === "") {
-      toast({ title: "No Text Selected", description: "Please select some text first.", variant: "destructive" });
-      return;
+      // If trying to complete a connection, currentSelection is the 'to' point.
+      // If it's empty, it's an issue handled inside the 'connection' block.
+      if (type !== 'connection' || !isConnecting) {
+          toast({ title: "No Text Selected", description: "Please select some text first.", variant: "destructive" });
+          return;
+      }
     }
-
+    
     if (type === 'connection') {
       if (!isConnecting) { // Start a new connection
+        if (!currentSelection || currentSelection.text.trim() === "") { // Should not happen if toolbar was shown
+             toast({ title: "No Text Selected", description: "Please select text for the start of the connection.", variant: "destructive" });
+             return;
+        }
         setIsConnecting(true);
         setPendingConnectionStart(currentSelection);
-        setCurrentSelection(null); // Clear current selection to allow selecting the end point
+        setCurrentSelection(null); 
         setShowAnnotationToolbar(false);
         toast({ title: "Connection Started", description: "Now select the second piece of text to connect to." });
       } else { // Complete the connection
         if (pendingConnectionStart) {
+          if (!currentSelection || currentSelection.text.trim() === "") {
+            toast({ title: "No 'To' Text Selected", description: "Please select the second piece of text to complete the connection.", variant: "destructive" });
+            return;
+          }
           if (pendingConnectionStart.start === currentSelection.start && pendingConnectionStart.end === currentSelection.end) {
             toast({ title: "Cannot Connect to Itself", description: "Please select a different piece of text for the end of the connection.", variant: "destructive" });
             return;
@@ -285,9 +303,10 @@ export default function ActiveReaderCore() {
         setShowAnnotationToolbar(false);
       }
     } else { // Handle other annotation types
-      if (isConnecting) { // If in connection mode, cancel it
+      if (isConnecting) { 
         setIsConnecting(false);
         setPendingConnectionStart(null);
+        setCurrentSelection(null); // Also clear current selection if a different tool is chosen
         toast({ title: "Connection Cancelled", description: "Annotation type changed before connection was completed.", variant: "destructive" });
       }
       addAnnotation(type);
@@ -312,7 +331,6 @@ export default function ActiveReaderCore() {
     let lastIndex = 0;
     const parts: (string | JSX.Element)[] = [];
 
-    // Simple highlights for pending connection start
     const tempAnnotations = [...annotations];
     if (isConnecting && pendingConnectionStart) {
         tempAnnotations.push({
@@ -320,7 +338,7 @@ export default function ActiveReaderCore() {
             start: pendingConnectionStart.start,
             end: pendingConnectionStart.end,
             text: pendingConnectionStart.text,
-            type: 'highlight', // Visually mark it like a highlight for now
+            type: 'highlight', 
         });
         tempAnnotations.sort((a,b) => a.start - b.start);
     }
@@ -332,7 +350,7 @@ export default function ActiveReaderCore() {
       }
       const def = annotationDefinitions[ann.type];
       const isPending = ann.id === 'pending-connection-start';
-      const colorClass = isPending ? 'bg-blue-300/50' : def.colorClass; // Different color for pending
+      const colorClass = isPending ? 'bg-blue-300/50' : def.colorClass; 
 
       const spanContent = (
         <span className={`px-0.5 py-0.5 rounded relative group ${colorClass} cursor-pointer hover:brightness-110 transition-all `}>
@@ -388,31 +406,45 @@ export default function ActiveReaderCore() {
     if (lastIndex < originalText.length) {
       parts.push(<React.Fragment key={`text-trailing-${lastIndex}`}>{originalText.substring(lastIndex)}</React.Fragment>);
     }
-    // Add a visual cue if connecting
-    let statusText = "";
-    if (isConnecting) {
-        if (pendingConnectionStart) {
-            statusText = "Connecting: Select the second piece of text.";
-        } else {
-            statusText = "Click the 'Connection' tool then select the first piece of text.";
-        }
-    }
-
+    
     return (
         <>
-            {isConnecting && (
-                <div className="mb-2 p-2 text-sm bg-blue-100 text-blue-700 rounded-md border border-blue-300 flex items-center">
-                    <Link2 className="h-4 w-4 mr-2 shrink-0" />
-                    {statusText}
-                    {pendingConnectionStart && (
-                        <Button variant="ghost" size="sm" onClick={() => {
-                            setIsConnecting(false);
-                            setPendingConnectionStart(null);
-                            toast({title: "Connection Cancelled"});
-                        }} className="ml-auto text-blue-700 hover:bg-blue-200">
-                            <MinusCircle className="h-4 w-4 mr-1"/> Cancel
+            {isConnecting && pendingConnectionStart && (
+                <div className="mb-2 p-3 text-sm bg-blue-100 text-blue-800 rounded-md border border-blue-300 flex items-center justify-between shadow">
+                    <div className='flex items-center'>
+                        <Link2 className="h-5 w-5 mr-2 shrink-0 text-blue-600" />
+                        <span className="font-medium">
+                            {currentSelection && currentSelection.text.trim() !== ""
+                                ? "Second point selected. Ready to connect."
+                                : "Select the second piece of text."
+                            }
+                        </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {currentSelection && currentSelection.text.trim() !== "" && (
+                            <Button 
+                                variant="outline" 
+                                size="sm" 
+                                onClick={() => handleToolbarAction('connection')} 
+                                className="bg-blue-500 hover:bg-blue-600 text-white border-blue-600"
+                            >
+                                <Link2 className="mr-1.5 h-4 w-4"/> Complete Connection
+                            </Button>
+                        )}
+                        <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            onClick={() => {
+                                setIsConnecting(false);
+                                setPendingConnectionStart(null);
+                                setCurrentSelection(null);
+                                toast({title: "Connection Cancelled"});
+                            }} 
+                            className="text-blue-700 hover:bg-blue-200 hover:text-blue-800"
+                        >
+                            <MinusCircle className="mr-1.5 h-4 w-4"/> Cancel
                         </Button>
-                    )}
+                    </div>
                 </div>
             )}
             <div ref={textDisplayRef} data-text-display-area className="whitespace-pre-wrap leading-relaxed selection:bg-blue-300 selection:text-blue-900">
@@ -506,7 +538,7 @@ export default function ActiveReaderCore() {
             onPaste={handleTextPaste}
             onChange={(e) => handleManualTextChange(e.target.value)}
             className="text-base"
-            disabled={isFileLoading || isConnecting}
+            disabled={isFileLoading || (isConnecting && !!pendingConnectionStart)}
           />
           <div className="flex items-center justify-center">
             <span className="text-sm text-muted-foreground">OR</span>
@@ -515,13 +547,13 @@ export default function ActiveReaderCore() {
             variant="outline"
             className="w-full"
             onClick={() => {
-                if (isConnecting) {
+                if (isConnecting && !!pendingConnectionStart) {
                     toast({title: "Connection in Progress", description: "Please complete or cancel the current connection first.", variant: "destructive"});
                     return;
                 }
                 fileInputRef.current?.click()
             }}
-            disabled={isFileLoading || isConnecting}
+            disabled={isFileLoading || (isConnecting && !!pendingConnectionStart)}
           >
             {isFileLoading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <UploadCloud className="mr-2 h-5 w-5" />}
             {isFileLoading ? 'Processing File...' : 'Upload .txt / .pdf File'}
@@ -532,7 +564,7 @@ export default function ActiveReaderCore() {
             onChange={handleFileChange}
             accept=".txt,.pdf"
             className="hidden"
-            disabled={isFileLoading || isConnecting}
+            disabled={isFileLoading || (isConnecting && !!pendingConnectionStart)}
           />
         </CardContent>
       </Card>
@@ -545,7 +577,7 @@ export default function ActiveReaderCore() {
                 <Edit3 className="h-6 w-6 text-primary" />
                 <CardTitle>Active Reading Space</CardTitle>
               </div>
-              <CardDescription>Select text to apply an annotation. For connections, click the <Link2 className="inline h-4 w-4"/> tool, select the first text, then select the second text.
+              <CardDescription>Select text to apply an annotation. For connections, click the <Link2 className="inline h-4 w-4"/> tool, select the first text, then select the second text using the status bar controls.
               </CardDescription>
             </CardHeader>
             <CardContent className="prose max-w-none min-h-[300px] p-6 text-base relative">
@@ -640,7 +672,7 @@ export default function ActiveReaderCore() {
                       value={summaryText}
                       onChange={(e) => setSummaryText(e.target.value)}
                       className="text-base"
-                      disabled={isConnecting}
+                      disabled={(isConnecting && !!pendingConnectionStart)}
                     />
                   </CardContent>
                 </Card>
@@ -652,7 +684,7 @@ export default function ActiveReaderCore() {
                   content={aiAnnotationGuide}
                   isLoading={isLoadingAiGuide}
                   actionButton={
-                    <Button onClick={fetchAiGuide} disabled={isLoadingAiGuide || !originalText || isConnecting} size="sm">
+                    <Button onClick={fetchAiGuide} disabled={isLoadingAiGuide || !originalText || (isConnecting && !!pendingConnectionStart)} size="sm">
                       {isLoadingAiGuide ? "Generating..." : "Get Guide"}
                     </Button>
                   }
@@ -666,7 +698,7 @@ export default function ActiveReaderCore() {
                   content={aiAnnotationFeedback}
                   isLoading={isLoadingAiAnnotationFeedback}
                   actionButton={
-                    <Button onClick={fetchAiAnnotationFeedback} disabled={isLoadingAiAnnotationFeedback || !originalText || annotations.length === 0 || isConnecting} size="sm">
+                    <Button onClick={fetchAiAnnotationFeedback} disabled={isLoadingAiAnnotationFeedback || !originalText || annotations.length === 0 || (isConnecting && !!pendingConnectionStart)} size="sm">
                       {isLoadingAiAnnotationFeedback ? "Analyzing..." : "Get Feedback"}
                     </Button>
                   }
@@ -680,7 +712,7 @@ export default function ActiveReaderCore() {
                   content={aiSummaryFeedback}
                   isLoading={isLoadingAiSummaryFeedback}
                   actionButton={
-                    <Button onClick={fetchAiSummaryFeedback} disabled={isLoadingAiSummaryFeedback || !originalText || !summaryText || isConnecting} size="sm">
+                    <Button onClick={fetchAiSummaryFeedback} disabled={isLoadingAiSummaryFeedback || !originalText || !summaryText || (isConnecting && !!pendingConnectionStart)} size="sm">
                       {isLoadingAiSummaryFeedback ? "Analyzing..." : "Get Feedback"}
                     </Button>
                   }
@@ -730,7 +762,7 @@ export default function ActiveReaderCore() {
                 <CardContent>
                   <ul className="space-y-3 max-h-60 overflow-y-auto">
                     {connections.map(conn => {
-                      const def = annotationDefinitions.connection; // Use connection's definition for styling
+                      const def = annotationDefinitions.connection; 
                       return (
                         <li key={conn.id} className={`text-sm p-3 border rounded-md ${def.colorClass.replace('/30','/20').replace('/40','/20')} hover:shadow-md transition-shadow`}>
                           <div className="flex justify-between items-start">
@@ -767,4 +799,3 @@ export default function ActiveReaderCore() {
     </div>
   );
 }
-
