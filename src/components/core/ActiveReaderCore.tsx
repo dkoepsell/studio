@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Lightbulb, Edit3, MessageSquare, Sparkles, FileText, Trash2, Highlighter, StickyNote,
-  CheckCircle, HelpCircle, UploadCloud, Loader2, ListChecks, BookMarked, KeyRound, Link2, MessageCircleQuestionIcon
+  CheckCircle, HelpCircle, UploadCloud, Loader2, ListChecks, BookMarked, KeyRound, Link2, MessageCircleQuestionIcon, MinusCircle
 } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { getAiAnnotationGuideAction, getAiSummaryFeedbackAction, getAiAnnotationFeedbackAction } from '@/app/actions';
@@ -21,13 +21,13 @@ import type { PDFDocumentProxy } from 'pdfjs-dist';
 
 // Define annotation types with their properties
 const annotationDefinitions = {
-  highlight: { label: 'Highlight', abbreviation: 'HL', colorClass: 'bg-yellow-400/40', icon: Highlighter, requiresNote: false, description: "Emphasize important text." },
-  'main-idea': { label: 'Main Idea', abbreviation: 'MI', colorClass: 'bg-blue-500/30', icon: BookMarked, requiresNote: false, description: "Identify a central point or thesis." },
-  'key-term': { label: 'Key Term', abbreviation: 'KT', colorClass: 'bg-green-500/30', icon: KeyRound, requiresNote: false, description: "Mark an important vocabulary word or concept." },
-  evidence: { label: 'Evidence', abbreviation: 'EV', colorClass: 'bg-indigo-500/30', icon: FileText, requiresNote: false, description: "Point to supporting details or examples." },
-  question: { label: 'Question', abbreviation: 'Q', colorClass: 'bg-purple-500/30', icon: HelpCircle, requiresNote: false, description: "Mark a point of inquiry in the text." },
-  connection: { label: 'Connection', abbreviation: 'CON', colorClass: 'bg-orange-500/30', icon: Link2, requiresNote: false, description: "Mark a connection to self, other texts, or the world." },
-  'custom-note': { label: 'Note', abbreviation: 'N', colorClass: 'bg-gray-500/30', icon: StickyNote, requiresNote: false, description: "Mark a general observation or comment." },
+  highlight: { label: 'Highlight', abbreviation: 'HL', colorClass: 'bg-yellow-400/40', icon: Highlighter, description: "Emphasize important text." },
+  'main-idea': { label: 'Main Idea', abbreviation: 'MI', colorClass: 'bg-blue-500/30', icon: BookMarked, description: "Identify a central point or thesis." },
+  'key-term': { label: 'Key Term', abbreviation: 'KT', colorClass: 'bg-green-500/30', icon: KeyRound, description: "Mark an important vocabulary word or concept." },
+  evidence: { label: 'Evidence', abbreviation: 'EV', colorClass: 'bg-indigo-500/30', icon: FileText, description: "Point to supporting details or examples." },
+  question: { label: 'Question', abbreviation: 'Q', colorClass: 'bg-purple-500/30', icon: HelpCircle, description: "Mark a point of inquiry in the text." },
+  connection: { label: 'Connection', abbreviation: 'CON', colorClass: 'bg-orange-500/30', icon: Link2, description: "Link two parts of the text." },
+  'custom-note': { label: 'Note', abbreviation: 'N', colorClass: 'bg-gray-500/30', icon: StickyNote, description: "Mark a general observation or comment." },
 } as const;
 
 type AnnotationDisplayType = keyof typeof annotationDefinitions;
@@ -38,7 +38,6 @@ interface Annotation {
   end: number;
   text: string;
   type: AnnotationDisplayType;
-  // No 'note' property needed anymore for this simplified version
 }
 
 interface SelectionRange {
@@ -46,6 +45,13 @@ interface SelectionRange {
   end: number;
   text: string;
 }
+
+interface ConnectionAnnotation {
+  id: string;
+  from: SelectionRange;
+  to: SelectionRange;
+}
+
 
 export default function ActiveReaderCore() {
   const [originalText, setOriginalText] = useState<string>("");
@@ -64,6 +70,12 @@ export default function ActiveReaderCore() {
   const [isLoadingAiAnnotationFeedback, setIsLoadingAiAnnotationFeedback] = useState<boolean>(false);
   const [isFileLoading, setIsFileLoading] = useState<boolean>(false);
 
+  // State for creating connections
+  const [isConnecting, setIsConnecting] = useState<boolean>(false);
+  const [pendingConnectionStart, setPendingConnectionStart] = useState<SelectionRange | null>(null);
+  const [connections, setConnections] = useState<ConnectionAnnotation[]>([]);
+
+
   const textDisplayRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
@@ -74,12 +86,15 @@ export default function ActiveReaderCore() {
 
   const resetAppStateForNewText = () => {
     setAnnotations([]);
+    setConnections([]); // Reset connections
     setSummaryText("");
     setAiAnnotationGuide(null);
     setAiSummaryFeedback(null);
     setAiAnnotationFeedback(null);
     setCurrentSelection(null);
     setShowAnnotationToolbar(false);
+    setIsConnecting(false); // Reset connection state
+    setPendingConnectionStart(null); // Reset pending connection
   };
 
   const handleTextPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -163,7 +178,7 @@ export default function ActiveReaderCore() {
       const start = preSelectionRange.toString().length;
       const end = start + range.toString().length;
 
-      if (start >= 0 && end >= start && range.toString().trim() !== "") {
+      if (start >= 0 && end > start && range.toString().trim() !== "") { // Ensure end > start
         setCurrentSelection({ start, end, text: range.toString() });
 
         const rect = range.getBoundingClientRect();
@@ -174,13 +189,21 @@ export default function ActiveReaderCore() {
           screenX: rect.left + window.scrollX + rect.width / 2,
           screenY: rect.top + window.scrollY
         });
-        setShowAnnotationToolbar(true);
+        if (!isConnecting) { // Only show toolbar if not in the middle of a connection
+             setShowAnnotationToolbar(true);
+        }
       } else {
         setShowAnnotationToolbar(false);
         setCurrentSelection(null);
       }
     } else {
       setShowAnnotationToolbar(false);
+      // If user clicks away and deselects, and was in connecting mode, cancel it
+      if (isConnecting && pendingConnectionStart) {
+        // Don't cancel if they just selected the first point
+      } else if (isConnecting) {
+         // Consider if clicking away should cancel an initiated connection
+      }
       setCurrentSelection(null);
     }
   };
@@ -202,7 +225,8 @@ export default function ActiveReaderCore() {
           textDisplayArea.removeEventListener('mouseup', debouncedHandleSelection);
       }
     };
-  }, [originalText, isFileLoading]);
+  }, [originalText, isFileLoading, isConnecting, pendingConnectionStart]);
+
 
   const addAnnotation = (type: AnnotationDisplayType) => {
     if (!currentSelection || currentSelection.text.trim() === "") return;
@@ -228,14 +252,58 @@ export default function ActiveReaderCore() {
   };
 
   const handleToolbarAction = (type: AnnotationDisplayType) => {
-    if (!currentSelection || currentSelection.text.trim() === "") return;
-    addAnnotation(type);
+    if (!currentSelection || currentSelection.text.trim() === "") {
+      toast({ title: "No Text Selected", description: "Please select some text first.", variant: "destructive" });
+      return;
+    }
+
+    if (type === 'connection') {
+      if (!isConnecting) { // Start a new connection
+        setIsConnecting(true);
+        setPendingConnectionStart(currentSelection);
+        setCurrentSelection(null); // Clear current selection to allow selecting the end point
+        setShowAnnotationToolbar(false);
+        toast({ title: "Connection Started", description: "Now select the second piece of text to connect to." });
+      } else { // Complete the connection
+        if (pendingConnectionStart) {
+          if (pendingConnectionStart.start === currentSelection.start && pendingConnectionStart.end === currentSelection.end) {
+            toast({ title: "Cannot Connect to Itself", description: "Please select a different piece of text for the end of the connection.", variant: "destructive" });
+            return;
+          }
+          const newConnection: ConnectionAnnotation = {
+            id: Date.now().toString(),
+            from: pendingConnectionStart,
+            to: currentSelection,
+          };
+          setConnections(prev => [...prev, newConnection]);
+          toast({ title: "Connection Created!", description: `Connected "${pendingConnectionStart.text}" to "${currentSelection.text}".`});
+        }
+        // Reset connection state
+        setIsConnecting(false);
+        setPendingConnectionStart(null);
+        setCurrentSelection(null);
+        setShowAnnotationToolbar(false);
+      }
+    } else { // Handle other annotation types
+      if (isConnecting) { // If in connection mode, cancel it
+        setIsConnecting(false);
+        setPendingConnectionStart(null);
+        toast({ title: "Connection Cancelled", description: "Annotation type changed before connection was completed.", variant: "destructive" });
+      }
+      addAnnotation(type);
+    }
   };
 
   const removeAnnotation = (id: string) => {
     setAnnotations(prev => prev.filter(ann => ann.id !== id));
     toast({ title: "Annotation Removed", variant: "destructive" });
   };
+
+  const removeConnection = (id: string) => {
+    setConnections(prev => prev.filter(conn => conn.id !== id));
+    toast({ title: "Connection Removed", variant: "destructive" });
+  };
+
 
   const renderTextWithAnnotations = () => {
     if (isFileLoading) return <div className="flex flex-col items-center justify-center min-h-[100px]"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="text-muted-foreground mt-2">Processing file...</p></div>;
@@ -244,52 +312,114 @@ export default function ActiveReaderCore() {
     let lastIndex = 0;
     const parts: (string | JSX.Element)[] = [];
 
-    annotations.forEach(ann => {
+    // Simple highlights for pending connection start
+    const tempAnnotations = [...annotations];
+    if (isConnecting && pendingConnectionStart) {
+        tempAnnotations.push({
+            id: 'pending-connection-start',
+            start: pendingConnectionStart.start,
+            end: pendingConnectionStart.end,
+            text: pendingConnectionStart.text,
+            type: 'highlight', // Visually mark it like a highlight for now
+        });
+        tempAnnotations.sort((a,b) => a.start - b.start);
+    }
+
+
+    tempAnnotations.forEach(ann => {
       if (ann.start > lastIndex) {
         parts.push(originalText.substring(lastIndex, ann.start));
       }
       const def = annotationDefinitions[ann.type];
+      const isPending = ann.id === 'pending-connection-start';
+      const colorClass = isPending ? 'bg-blue-300/50' : def.colorClass; // Different color for pending
+
       const spanContent = (
-        <span className={`px-0.5 py-0.5 rounded relative group ${def.colorClass} cursor-pointer hover:brightness-110 transition-all `}>
+        <span className={`px-0.5 py-0.5 rounded relative group ${colorClass} cursor-pointer hover:brightness-110 transition-all `}>
           {originalText.substring(ann.start, ann.end)}
-          <span
-            className={`ml-0.5 text-[0.6rem] font-bold p-[1px] px-[3px] rounded-sm align-super ${def.colorClass.replace('/30', '/60').replace('/40','/70')} text-black/70`}
-            title={def.label}
-          >
-            {def.abbreviation}
-          </span>
+          {!isPending && (
+            <span
+              className={`ml-0.5 text-[0.6rem] font-bold p-[1px] px-[3px] rounded-sm align-super ${def.colorClass.replace('/30', '/60').replace('/40','/70')} text-black/70`}
+              title={def.label}
+            >
+              {def.abbreviation}
+            </span>
+          )}
+          {isPending && (
+            <span
+              className={`ml-0.5 text-[0.6rem] font-bold p-[1px] px-[3px] rounded-sm align-super bg-blue-500/70 text-white`}
+              title="Starting point of connection"
+            >
+              FROM
+            </span>
+          )}
         </span>
       );
 
-      parts.push(
-        <Popover key={ann.id}>
-          <PopoverTrigger asChild>{spanContent}</PopoverTrigger>
-          <PopoverContent className="w-80 shadow-xl">
-            <div className="grid gap-4">
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <def.icon className={`h-5 w-5 ${def.colorClass.replace('bg-', 'text-').replace('/30', '-700').replace('/40','-700')}`} />
-                  <h4 className="font-medium leading-none">{def.label}</h4>
+      if (isPending) {
+        parts.push(spanContent);
+      } else {
+         parts.push(
+          <Popover key={ann.id}>
+            <PopoverTrigger asChild>{spanContent}</PopoverTrigger>
+            <PopoverContent className="w-80 shadow-xl">
+              <div className="grid gap-4">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <def.icon className={`h-5 w-5 ${def.colorClass.replace('bg-', 'text-').replace('/30', '-700').replace('/40','-700')}`} />
+                    <h4 className="font-medium leading-none">{def.label}</h4>
+                  </div>
+                  <p className="text-sm text-muted-foreground break-words">
+                    Annotated: <span className="italic">"{ann.text}"</span>
+                  </p>
                 </div>
-                <p className="text-sm text-muted-foreground break-words">
-                  Annotated: <span className="italic">"{ann.text}"</span>
-                </p>
+                <p className="text-sm text-muted-foreground italic">This annotation type does not support additional notes in this version.</p>
+                <Button variant="outline" size="sm" onClick={() => removeAnnotation(ann.id)} className="mt-2">
+                  <Trash2 className="mr-2 h-4 w-4" /> Delete Annotation
+                </Button>
               </div>
-              <p className="text-sm text-muted-foreground italic">This annotation type does not support additional notes in this version.</p>
-              <Button variant="outline" size="sm" onClick={() => removeAnnotation(ann.id)} className="mt-2">
-                <Trash2 className="mr-2 h-4 w-4" /> Delete Annotation
-              </Button>
-            </div>
-          </PopoverContent>
-        </Popover>
-      );
+            </PopoverContent>
+          </Popover>
+        );
+      }
       lastIndex = ann.end;
     });
 
     if (lastIndex < originalText.length) {
       parts.push(originalText.substring(lastIndex));
     }
-    return <div ref={textDisplayRef} data-text-display-area className="whitespace-pre-wrap leading-relaxed selection:bg-blue-300 selection:text-blue-900">{parts}</div>;
+    // Add a visual cue if connecting
+    let statusText = "";
+    if (isConnecting) {
+        if (pendingConnectionStart) {
+            statusText = "Connecting: Select the second piece of text.";
+        } else {
+            statusText = "Click the 'Connection' tool then select the first piece of text.";
+        }
+    }
+
+    return (
+        <>
+            {isConnecting && (
+                <div className="mb-2 p-2 text-sm bg-blue-100 text-blue-700 rounded-md border border-blue-300 flex items-center">
+                    <Link2 className="h-4 w-4 mr-2 shrink-0" />
+                    {statusText}
+                    {pendingConnectionStart && (
+                        <Button variant="ghost" size="sm" onClick={() => {
+                            setIsConnecting(false);
+                            setPendingConnectionStart(null);
+                            toast({title: "Connection Cancelled"});
+                        }} className="ml-auto text-blue-700 hover:bg-blue-200">
+                            <MinusCircle className="h-4 w-4 mr-1"/> Cancel
+                        </Button>
+                    )}
+                </div>
+            )}
+            <div ref={textDisplayRef} data-text-display-area className="whitespace-pre-wrap leading-relaxed selection:bg-blue-300 selection:text-blue-900">
+                {parts}
+            </div>
+        </>
+    );
   };
 
   const fetchAiGuide = async () => {
@@ -376,7 +506,7 @@ export default function ActiveReaderCore() {
             onPaste={handleTextPaste}
             onChange={(e) => handleManualTextChange(e.target.value)}
             className="text-base"
-            disabled={isFileLoading}
+            disabled={isFileLoading || isConnecting}
           />
           <div className="flex items-center justify-center">
             <span className="text-sm text-muted-foreground">OR</span>
@@ -384,8 +514,14 @@ export default function ActiveReaderCore() {
           <Button
             variant="outline"
             className="w-full"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isFileLoading}
+            onClick={() => {
+                if (isConnecting) {
+                    toast({title: "Connection in Progress", description: "Please complete or cancel the current connection first.", variant: "destructive"});
+                    return;
+                }
+                fileInputRef.current?.click()
+            }}
+            disabled={isFileLoading || isConnecting}
           >
             {isFileLoading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <UploadCloud className="mr-2 h-5 w-5" />}
             {isFileLoading ? 'Processing File...' : 'Upload .txt / .pdf File'}
@@ -396,7 +532,7 @@ export default function ActiveReaderCore() {
             onChange={handleFileChange}
             accept=".txt,.pdf"
             className="hidden"
-            disabled={isFileLoading}
+            disabled={isFileLoading || isConnecting}
           />
         </CardContent>
       </Card>
@@ -409,11 +545,12 @@ export default function ActiveReaderCore() {
                 <Edit3 className="h-6 w-6 text-primary" />
                 <CardTitle>Active Reading Space</CardTitle>
               </div>
-              <CardDescription>Select text to apply an annotation. Your annotations will appear in the text below.</CardDescription>
+              <CardDescription>Select text to apply an annotation. For connections, click the <Link2 className="inline h-4 w-4"/> tool, select the first text, then select the second text.
+              </CardDescription>
             </CardHeader>
             <CardContent className="prose max-w-none min-h-[300px] p-6 text-base relative">
               {renderTextWithAnnotations()}
-              {showAnnotationToolbar && currentSelection && currentSelection.text.trim() !== "" && (
+              {showAnnotationToolbar && currentSelection && currentSelection.text.trim() !== "" && !isConnecting && (
                 <div
                   className="absolute bg-card border border-border rounded-md shadow-lg p-1 flex flex-wrap gap-1 z-10"
                   style={{
@@ -503,6 +640,7 @@ export default function ActiveReaderCore() {
                       value={summaryText}
                       onChange={(e) => setSummaryText(e.target.value)}
                       className="text-base"
+                      disabled={isConnecting}
                     />
                   </CardContent>
                 </Card>
@@ -514,7 +652,7 @@ export default function ActiveReaderCore() {
                   content={aiAnnotationGuide}
                   isLoading={isLoadingAiGuide}
                   actionButton={
-                    <Button onClick={fetchAiGuide} disabled={isLoadingAiGuide || !originalText} size="sm">
+                    <Button onClick={fetchAiGuide} disabled={isLoadingAiGuide || !originalText || isConnecting} size="sm">
                       {isLoadingAiGuide ? "Generating..." : "Get Guide"}
                     </Button>
                   }
@@ -528,7 +666,7 @@ export default function ActiveReaderCore() {
                   content={aiAnnotationFeedback}
                   isLoading={isLoadingAiAnnotationFeedback}
                   actionButton={
-                    <Button onClick={fetchAiAnnotationFeedback} disabled={isLoadingAiAnnotationFeedback || !originalText || annotations.length === 0} size="sm">
+                    <Button onClick={fetchAiAnnotationFeedback} disabled={isLoadingAiAnnotationFeedback || !originalText || annotations.length === 0 || isConnecting} size="sm">
                       {isLoadingAiAnnotationFeedback ? "Analyzing..." : "Get Feedback"}
                     </Button>
                   }
@@ -542,7 +680,7 @@ export default function ActiveReaderCore() {
                   content={aiSummaryFeedback}
                   isLoading={isLoadingAiSummaryFeedback}
                   actionButton={
-                    <Button onClick={fetchAiSummaryFeedback} disabled={isLoadingAiSummaryFeedback || !originalText || !summaryText} size="sm">
+                    <Button onClick={fetchAiSummaryFeedback} disabled={isLoadingAiSummaryFeedback || !originalText || !summaryText || isConnecting} size="sm">
                       {isLoadingAiSummaryFeedback ? "Analyzing..." : "Get Feedback"}
                     </Button>
                   }
@@ -568,9 +706,45 @@ export default function ActiveReaderCore() {
                                 <def.icon className={`h-4 w-4 shrink-0 ${def.colorClass.replace('bg-', 'text-').replace('/30', '-700').replace('/40','-700')}`} />
                                 <p className={`font-semibold text-sm truncate`}>{def.label}: <span className="italic font-normal">"{ann.text}"</span></p>
                               </div>
-                              {/* No note to display for this simplified version */}
                             </div>
                             <Button variant="ghost" size="sm" onClick={() => removeAnnotation(ann.id)} className="text-destructive hover:text-destructive/80 p-1 h-auto ml-2 shrink-0">
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </CardContent>
+              </Card>
+            )}
+
+            {connections.length > 0 && (
+              <Card className="shadow-lg mt-6">
+                <CardHeader>
+                    <div className="flex items-center gap-2">
+                        <Link2 className="h-5 w-5 text-primary" />
+                        <CardTitle className="text-lg font-medium">Your Connections</CardTitle>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                  <ul className="space-y-3 max-h-60 overflow-y-auto">
+                    {connections.map(conn => {
+                      const def = annotationDefinitions.connection; // Use connection's definition for styling
+                      return (
+                        <li key={conn.id} className={`text-sm p-3 border rounded-md ${def.colorClass.replace('/30','/20').replace('/40','/20')} hover:shadow-md transition-shadow`}>
+                          <div className="flex justify-between items-start">
+                            <div className="flex-grow overflow-hidden space-y-1">
+                                <div className="flex items-center gap-1.5">
+                                    <span className={`font-semibold text-xs px-1.5 py-0.5 rounded-sm ${def.colorClass.replace('/30','/50')}`}>FROM:</span>
+                                    <p className="italic text-xs">"{conn.from.text}"</p>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                    <span className={`font-semibold text-xs px-1.5 py-0.5 rounded-sm ${def.colorClass.replace('/30','/50')}`}>TO:</span>
+                                    <p className="italic text-xs">"{conn.to.text}"</p>
+                                </div>
+                            </div>
+                            <Button variant="ghost" size="sm" onClick={() => removeConnection(conn.id)} className="text-destructive hover:text-destructive/80 p-1 h-auto ml-2 shrink-0">
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
@@ -593,4 +767,3 @@ export default function ActiveReaderCore() {
     </div>
   );
 }
-
