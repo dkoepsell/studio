@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -7,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Lightbulb, Edit3, MessageSquare, Sparkles, FileText, Trash2, Highlighter, StickyNote,
-  CheckCircle, AlertTriangle, MessageCircleQuestion, KeyRound, BookMarked, Link2, HelpCircle, UploadCloud, Loader2, Info, ListChecks
+  CheckCircle, HelpCircle, UploadCloud, Loader2, ListChecks, BookMarked, KeyRound, Link2, MessageCircleQuestionIcon
 } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { getAiAnnotationGuideAction, getAiSummaryFeedbackAction, getAiAnnotationFeedbackAction } from '@/app/actions';
@@ -35,9 +36,9 @@ interface Annotation {
   id: string;
   start: number;
   end: number;
-  text: string; // The selected text
+  text: string; 
   type: AnnotationDisplayType;
-  note?: string; // User's custom textual note
+  note?: string; 
 }
 
 interface SelectionRange {
@@ -46,9 +47,8 @@ interface SelectionRange {
   text: string;
 }
 
-// Helper type for the editing annotation state
 type EditingAnnotationPayload = {
-  id: 'new-note'; // Indicates a new annotation being created
+  id: 'new-note'; 
   start: number;
   end: number;
   text: string;
@@ -61,8 +61,8 @@ export default function ActiveReaderCore() {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [currentSelection, setCurrentSelection] = useState<SelectionRange | null>(null);
   const [showAnnotationToolbar, setShowAnnotationToolbar] = useState(false);
-  const [toolbarPosition, setToolbarPosition] = useState({ x: 0, y: 0 });
-  const [annotationNote, setAnnotationNote] = useState(""); // For new notes
+  const [toolbarPosition, setToolbarPosition] = useState({ x: 0, y: 0, screenX: 0, screenY: 0 });
+  const [annotationNote, setAnnotationNote] = useState("");
   const [editingAnnotation, setEditingAnnotation] = useState<EditingAnnotationPayload | null>(null);
 
 
@@ -93,6 +93,7 @@ export default function ActiveReaderCore() {
     setCurrentSelection(null);
     setShowAnnotationToolbar(false);
     setEditingAnnotation(null);
+    setAnnotationNote("");
   };
 
   const handleTextPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -165,8 +166,8 @@ export default function ActiveReaderCore() {
 
       if (!container.contains(range.commonAncestorContainer) || 
           (range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE && !(range.commonAncestorContainer as Element).closest('[data-text-display-area]'))) {
-        setShowAnnotationToolbar(false);
         if (!editingAnnotation) {
+            setShowAnnotationToolbar(false);
             setCurrentSelection(null);
         }
         return;
@@ -185,14 +186,16 @@ export default function ActiveReaderCore() {
         const containerRect = container.getBoundingClientRect();
         setToolbarPosition({ 
           x: rect.left - containerRect.left + rect.width / 2, 
-          y: rect.top - containerRect.top - 10 
+          y: rect.top - containerRect.top -10, // Position above selection for relative toolbar
+          screenX: rect.left + rect.width / 2, // Screen X for popover
+          screenY: rect.top // Screen Y for popover (top of selection)
         });
         if (!editingAnnotation) { 
             setShowAnnotationToolbar(true);
         }
       } else {
-         setShowAnnotationToolbar(false);
          if (!editingAnnotation) {
+            setShowAnnotationToolbar(false);
             setCurrentSelection(null);
          }
       }
@@ -269,17 +272,28 @@ export default function ActiveReaderCore() {
   };
 
   const handleSaveAnnotationNote = () => {
-    if (editingAnnotation && (annotationNote.trim() || annotationDefinitions[editingAnnotation.type].requiresNote === false) ) {
-      addAnnotation(editingAnnotation.type, annotationNote.trim() ? annotationNote : undefined);
-    } else if (editingAnnotation && !annotationNote.trim() && annotationDefinitions[editingAnnotation.type].requiresNote === true) {
-        toast({ title: "Empty Note", description: "Please enter some text for your note.", variant: "destructive" });
+    if (editingAnnotation) {
+      const noteText = annotationNote.trim();
+      const def = annotationDefinitions[editingAnnotation.type];
+  
+      if (def.requiresNote && !noteText) {
+        toast({ 
+          title: "Note Required", 
+          description: `A note is required for a "${def.label}" annotation. Please enter some text or cancel.`, 
+          variant: "destructive" 
+        });
+        return; 
+      }
+      addAnnotation(editingAnnotation.type, noteText ? noteText : undefined);
     } else {
-        setEditingAnnotation(null); 
-        setShowAnnotationToolbar(false);
-        setCurrentSelection(null); 
+      // This case should ideally not be reached if UI logic is correct
+      setEditingAnnotation(null); 
+      setShowAnnotationToolbar(false);
+      setCurrentSelection(null); 
+      setAnnotationNote("");
     }
   };
-
+  
   const handleCancelAnnotationNote = () => {
     setEditingAnnotation(null);
     setAnnotationNote("");
@@ -360,9 +374,8 @@ export default function ActiveReaderCore() {
       toast({ title: "No Text Provided", description: "Please paste or upload some text first.", variant: "destructive" });
       return;
     }
-    if (annotations.length === 0) {
-      toast({ title: "Make Annotations First", description: "Please make at least one annotation before requesting an AI guide.", variant: "destructive" });
-      return;
+    if (annotations.length === 0 && originalText) { // Allow guide even without annotations if text exists
+       // Consider if this behavior is desired. Currently requires annotations.
     }
     setIsLoadingAiGuide(true);
     setAiAnnotationGuide(null);
@@ -483,7 +496,11 @@ export default function ActiveReaderCore() {
               {showAnnotationToolbar && currentSelection && currentSelection.text.trim() !== "" && !editingAnnotation && (
                 <div 
                   className="absolute bg-card border border-border rounded-md shadow-lg p-1 flex flex-wrap gap-1 z-10"
-                  style={{ left: Math.max(0, toolbarPosition.x), top: Math.max(0, toolbarPosition.y), transform: 'translate(-50%, -100%)' }}
+                  style={{ 
+                    left: Math.max(0, toolbarPosition.x), 
+                    top: Math.max(0, toolbarPosition.y), 
+                    transform: 'translate(-50%, -100%)' 
+                  }}
                   onMouseDown={(e) => e.stopPropagation()} 
                   onMouseUp={(e) => e.stopPropagation()}
                 >
@@ -514,12 +531,12 @@ export default function ActiveReaderCore() {
                 </PopoverTrigger>
                 {editingAnnotation && ( 
                   <PopoverContent 
-                    className="w-64 p-4" 
+                    className="w-64 p-4 shadow-xl" 
                     style={{
-                        position: 'absolute',
-                        left: Math.max(0, toolbarPosition.x), 
-                        top: Math.max(0, toolbarPosition.y - 20), 
-                        transform: 'translate(-50%, -100%)',
+                        position: 'fixed', // Use fixed for screen coordinate positioning
+                        left: `${toolbarPosition.screenX}px`, 
+                        top: `${toolbarPosition.screenY - 10}px`, // Position 10px above selection top
+                        transform: 'translate(-50%, -100%)', // Center horizontally, place above its 'top'
                         zIndex: 20, 
                     }}
                     onOpenAutoFocus={(e) => e.preventDefault()} 
@@ -558,17 +575,21 @@ export default function ActiveReaderCore() {
                   <h4 className="font-semibold mb-2 text-base">Annotation Legend:</h4>
                   <ul className="space-y-1.5 text-sm">
                     {Object.entries(annotationDefinitions).map(([key, def]) => (
-                      <li key={key} className="flex items-center gap-2">
-                        <def.icon className={`h-4 w-4 shrink-0 ${def.colorClass.replace('bg-', 'text-').replace('/30', '-700').replace('/40', '-700')}`} />
-                        <span className={`w-3 h-3 rounded-sm shrink-0 ${def.colorClass.replace('/30', '/80').replace('/40', '/80')}`}></span>
-                        <span className="font-medium">{def.label} ({def.abbreviation}):</span>
-                        <span className="text-muted-foreground text-xs">{def.description}</span>
+                      <li key={key} className="flex items-start gap-2">
+                         <div className="flex items-center shrink-0 mt-0.5">
+                            <def.icon className={`h-4 w-4 shrink-0 ${def.colorClass.replace('bg-', 'text-').replace('/30', '-700').replace('/40', '-700')}`} />
+                            <span className={`w-3 h-3 rounded-sm shrink-0 ml-1 ${def.colorClass.replace('/30', '/80').replace('/40', '/80')}`}></span>
+                         </div>
+                        <div className="flex-grow">
+                            <span className="font-medium">{def.label} ({def.abbreviation}):</span>
+                            <span className="text-muted-foreground text-xs block">{def.description}</span>
+                        </div>
                       </li>
                     ))}
                   </ul>
                 </div>
                 <div>
-                  <h4 className="font-semibold mb-2 text-base">Active Reading Tips:</h4>
+                  <h4 className="font-semibold mb-2 text-base mt-4">Active Reading Tips:</h4>
                   <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground">
                     <li>Engage actively to improve understanding and retention.</li>
                     <li>Mark main ideas, key terms, and supporting evidence.</li>
@@ -584,7 +605,7 @@ export default function ActiveReaderCore() {
               <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="summary"><MessageSquare className="mr-1 h-4 w-4 inline-block"/>Summary</TabsTrigger>
                 <TabsTrigger value="ai-guide"><Lightbulb className="mr-1 h-4 w-4 inline-block"/>Guide</TabsTrigger>
-                <TabsTrigger value="ann-feedback"><MessageCircleQuestion className="mr-1 h-4 w-4 inline-block"/>Ann. Fbk</TabsTrigger>
+                <TabsTrigger value="ann-feedback"><MessageCircleQuestionIcon className="mr-1 h-4 w-4 inline-block"/>Ann. Fbk</TabsTrigger>
                 <TabsTrigger value="sum-feedback"><Sparkles className="mr-1 h-4 w-4 inline-block"/>Sum. Fbk</TabsTrigger>
               </TabsList>
               <TabsContent value="summary">
@@ -614,17 +635,17 @@ export default function ActiveReaderCore() {
                   content={aiAnnotationGuide}
                   isLoading={isLoadingAiGuide}
                   actionButton={
-                    <Button onClick={fetchAiGuide} disabled={isLoadingAiGuide || !originalText || annotations.length === 0} size="sm">
+                    <Button onClick={fetchAiGuide} disabled={isLoadingAiGuide || !originalText} size="sm">
                       {isLoadingAiGuide ? "Generating..." : "Get Guide"}
                     </Button>
                   }
-                  placeholderText={annotations.length === 0 ? "Make some annotations first, then click 'Get Guide'." : "Click 'Get Guide' to see AI-suggested annotations for the text."}
+                  placeholderText={!originalText ? "Import text first." : "Click 'Get Guide' to see AI-suggested annotations for the text. You can do this even before making your own annotations."}
                 />
               </TabsContent>
               <TabsContent value="ann-feedback">
                 <AiHelperCard
                   title="AI Annotation Feedback"
-                  icon={MessageCircleQuestion}
+                  icon={MessageCircleQuestionIcon}
                   content={aiAnnotationFeedback}
                   isLoading={isLoadingAiAnnotationFeedback}
                   actionButton={
@@ -694,3 +715,4 @@ export default function ActiveReaderCore() {
   );
 }
 
+    
