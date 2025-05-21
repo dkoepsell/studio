@@ -26,7 +26,7 @@ const annotationDefinitions = {
   'key-term': { label: 'Key Term', abbreviation: 'KT', colorClass: 'bg-green-500/30', icon: KeyRound, description: "Mark an important vocabulary word or concept." },
   evidence: { label: 'Evidence', abbreviation: 'EV', colorClass: 'bg-indigo-500/30', icon: FileText, description: "Point to supporting details or examples." },
   question: { label: 'Question', abbreviation: 'Q', colorClass: 'bg-purple-500/30', icon: HelpCircle, description: "Mark a point of inquiry in the text." },
-  connection: { label: 'Connection', abbreviation: 'CON', colorClass: 'bg-orange-500/30', icon: Link2, description: "Link two parts of the text. Select first text, click tool, then select second text." },
+  connection: { label: 'Connection', abbreviation: 'CON', colorClass: 'bg-orange-500/30', icon: Link2, description: "Link two parts of the text. Select first text, click tool, then select second text. Connections are shown with colored lines and underlines." },
   'custom-note': { label: 'Note', abbreviation: 'N', colorClass: 'bg-gray-500/30', icon: StickyNote, description: "Mark a general observation or comment." },
 } as const;
 
@@ -52,12 +52,21 @@ interface ConnectionAnnotation {
   to: SelectionRange;
 }
 
+const connectionColors = [
+  'hsl(var(--destructive))', // Red
+  'hsl(240 80% 65%)',       // Indigo/Purple
+  'hsl(150 70% 45%)',       // Teal/Green
+  'hsl(330 80% 60%)',       // Pink/Magenta
+  'hsl(var(--accent))',       // Warm Orange (from theme)
+];
+
 interface LineDrawData {
   id: string;
   x1: number;
   y1: number;
   x2: number;
   y2: number;
+  color: string;
 }
 
 
@@ -329,17 +338,21 @@ export default function ActiveReaderCore() {
   };
 
   const calculateLineCoordinates = useCallback(() => {
-    if (!textDisplayRef.current) return;
+    if (!textDisplayRef.current || connections.length === 0) {
+      setLineDrawData([]);
+      return;
+    }
     const containerRect = textDisplayRef.current.getBoundingClientRect();
     const newLines: LineDrawData[] = [];
 
-    connections.forEach(conn => {
+    connections.forEach((conn, index) => {
       const fromEl = textDisplayRef.current?.querySelector(`[data-conn-marker-id="${conn.id}-from"]`);
       const toEl = textDisplayRef.current?.querySelector(`[data-conn-marker-id="${conn.id}-to"]`);
 
       if (fromEl && toEl) {
         const fromRect = fromEl.getBoundingClientRect();
         const toRect = toEl.getBoundingClientRect();
+        const lineColor = connectionColors[index % connectionColors.length];
 
         newLines.push({
           id: conn.id,
@@ -347,6 +360,7 @@ export default function ActiveReaderCore() {
           y1: fromRect.top - containerRect.top + fromRect.height / 2,
           x2: toRect.left - containerRect.left + toRect.width / 2,
           y2: toRect.top - containerRect.top + toRect.height / 2,
+          color: lineColor,
         });
       }
     });
@@ -368,13 +382,12 @@ export default function ActiveReaderCore() {
 
     const parts: (string | JSX.Element)[] = [];
     
-    // Create a list of all event points: 0, text length, and all annotation/connection start/end points
     let eventPoints = new Set<number>([0, originalText.length]);
     annotations.forEach(ann => {
       eventPoints.add(ann.start);
       eventPoints.add(ann.end);
     });
-    connections.forEach(conn => {
+    connections.forEach((conn, connIndex) => {
       eventPoints.add(conn.from.start);
       eventPoints.add(conn.from.end);
       eventPoints.add(conn.to.start);
@@ -385,18 +398,20 @@ export default function ActiveReaderCore() {
       eventPoints.add(pendingConnectionStart.end);
     }
 
-    const sortedPoints = Array.from(eventPoints).sort((a, b) => a - b);
+    const sortedPoints = Array.from(eventPoints).sort((a, b) => a - b).filter((p, i, arr) => i === 0 || p > arr[i-1]);
 
-    for (let i = 0; i < sortedPoints.length -1; i++) {
+
+    for (let i = 0; i < sortedPoints.length; i++) {
       const start = sortedPoints[i];
-      const end = sortedPoints[i+1];
+      const end = (i + 1 < sortedPoints.length) ? sortedPoints[i+1] : originalText.length;
 
-      if (start >= end) continue; // Skip empty or invalid segments
+      if (start >= end) continue; 
 
       const segmentText = originalText.substring(start, end);
       if (!segmentText) continue;
 
       let segmentClasses = "px-0.5 py-0.5 rounded relative group hover:brightness-110 transition-all";
+      let segmentStyles: React.CSSProperties = {};
       let dataAttributes: Record<string, string> = {};
       let annotationForPopover: Annotation | null = null;
       let abbreviation: string | null = null;
@@ -405,29 +420,30 @@ export default function ActiveReaderCore() {
 
       // Check for pending connection start
       if (isConnecting && pendingConnectionStart && start >= pendingConnectionStart.start && end <= pendingConnectionStart.end) {
-        segmentClasses += ` ${'bg-blue-300/50'}`; // Highlight for pending connection start
-        if (start === pendingConnectionStart.start && end === pendingConnectionStart.end) { // Exact match
-             dataAttributes['data-conn-marker-id'] = `pending-${pendingConnectionStart.start}-from`;
-        }
+        segmentClasses += ` ${'bg-blue-300/50'}`; 
+        if (start === pendingConnectionStart.start) dataAttributes['data-conn-marker-id'] = `pending-${pendingConnectionStart.id || 'new'}-from`;
       }
       
-      // Check for completed connections
-      connections.forEach(conn => {
+      connections.forEach((conn, connIndex) => {
+        const connColor = connectionColors[connIndex % connectionColors.length];
         if (start >= conn.from.start && end <= conn.from.end) {
-          // segmentClasses += ` ${annotationDefinitions.connection.colorClass}`; // Optional: style connection points
-           if (start === conn.from.start && end === conn.from.end) dataAttributes['data-conn-marker-id'] = `${conn.id}-from`;
+           if (start === conn.from.start) dataAttributes['data-conn-marker-id'] = `${conn.id}-from`;
+           segmentStyles.textDecoration = 'underline';
+           segmentStyles.textDecorationColor = connColor;
+           segmentStyles.textDecorationThickness = '2px';
+           segmentStyles.textUnderlineOffset = '3px';
         }
         if (start >= conn.to.start && end <= conn.to.end) {
-          // segmentClasses += ` ${annotationDefinitions.connection.colorClass}`; // Optional: style connection points
-          if (start === conn.to.start && end === conn.to.end) dataAttributes['data-conn-marker-id'] = `${conn.id}-to`;
+          if (start === conn.to.start) dataAttributes['data-conn-marker-id'] = `${conn.id}-to`;
+          segmentStyles.textDecoration = 'underline';
+          segmentStyles.textDecorationColor = connColor;
+          segmentStyles.textDecorationThickness = '2px';
+          segmentStyles.textUnderlineOffset = '3px';
         }
       });
 
-      // Check for annotations (highest priority if overlapping, or combine?)
-      // For simplicity, pick the first one that fully contains or starts at this segment
       const applicableAnnotations = annotations.filter(ann => start >= ann.start && end <= ann.end);
       if (applicableAnnotations.length > 0) {
-        // Prioritize longer annotations or decide on a merging strategy if complex overlaps needed
         const currentAnn = applicableAnnotations.sort((a,b) => (b.end-b.start) - (a.end-a.start))[0];
         annotationForPopover = currentAnn;
         const def = annotationDefinitions[currentAnn.type];
@@ -438,12 +454,12 @@ export default function ActiveReaderCore() {
       }
       
       const spanKey = `segment-${start}-${end}`;
-      let spanContent = <span className={segmentClasses} {...dataAttributes}>{segmentText}</span>;
+      let spanContent = <span className={segmentClasses} style={segmentStyles} {...dataAttributes}>{segmentText}</span>;
 
-      if (abbreviation && labelForTitle && !dataAttributes['data-conn-marker-id']?.startsWith('pending')) { // Don't add abbreviation to pending markers
-         const def = annotationDefinitions[annotationForPopover!.type]; // annotationForPopover must exist if abbreviation is set
+      if (abbreviation && labelForTitle && !dataAttributes['data-conn-marker-id']?.startsWith('pending')) {
+         const def = annotationDefinitions[annotationForPopover!.type];
          spanContent = (
-            <span className={`${segmentClasses} ${def.colorClass} cursor-pointer`} {...dataAttributes}>
+            <span className={`${segmentClasses} ${def.colorClass} cursor-pointer`} style={segmentStyles} {...dataAttributes}>
               {segmentText}
               <span
                 className={`ml-0.5 text-[0.6rem] font-bold p-[1px] px-[3px] rounded-sm align-super ${def.colorClass.replace('/30', '/60').replace('/40','/70')} text-black/70`}
@@ -487,7 +503,7 @@ export default function ActiveReaderCore() {
     
     return (
         <>
-            {isConnecting && ( // This status bar is for active connection process
+            {isConnecting && ( 
                 <div className="mb-2 p-3 text-sm bg-blue-100 text-blue-800 rounded-md border border-blue-300 flex items-center justify-between shadow">
                     <div className='flex items-center'>
                         <Link2 className="h-5 w-5 mr-2 shrink-0 text-blue-600" />
@@ -526,9 +542,8 @@ export default function ActiveReaderCore() {
                 </div>
             )}
             <div ref={textDisplayRef} data-text-display-area className="whitespace-pre-wrap leading-relaxed selection:bg-blue-300 selection:text-blue-900 relative">
-                 {/* SVG Overlay for lines - must be relative to this div */}
                 <svg 
-                    className="absolute top-0 left-0 w-full h-full pointer-events-none z-[5]" // z-index to be above text, below toolbar maybe
+                    className="absolute top-0 left-0 w-full h-full pointer-events-none z-[5]"
                 >
                     {lineDrawData.map(line => (
                         <line
@@ -537,17 +552,10 @@ export default function ActiveReaderCore() {
                             y1={line.y1}
                             x2={line.x2}
                             y2={line.y2}
-                            stroke="hsl(var(--primary))" // Use theme primary color
+                            stroke={line.color || 'hsl(var(--primary))'} 
                             strokeWidth="2"
-                            markerEnd="url(#arrowhead)" // Optional: if you define an arrowhead
                         />
                     ))}
-                    {/* Optional: Define arrowhead marker for lines */}
-                    {/* <defs>
-                        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                            <polygon points="0 0, 10 3.5, 0 7" fill="hsl(var(--primary))" />
-                        </marker>
-                    </defs> */}
                 </svg>
                 {parts.map((part, index) => <React.Fragment key={index}>{part}</React.Fragment>)}
             </div>
@@ -673,7 +681,7 @@ export default function ActiveReaderCore() {
 
       {originalText && !isFileLoading && (
         <div className="grid md:grid-cols-3 gap-6">
-          <Card className="md:col-span-2 shadow-xl relative"> {/* Added relative for SVG positioning */}
+          <Card className="md:col-span-2 shadow-xl relative"> 
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Edit3 className="h-6 w-6 text-primary" />
@@ -682,11 +690,11 @@ export default function ActiveReaderCore() {
               <CardDescription>Select text to apply an annotation. For connections, click the <Link2 className="inline h-4 w-4"/> tool, select the first text, then select the second text using the status bar controls. Lines will appear for completed connections.
               </CardDescription>
             </CardHeader>
-            <CardContent className="prose max-w-none min-h-[300px] p-6 text-base relative"> {/* Added relative for SVG positioning parent */}
+            <CardContent className="prose max-w-none min-h-[300px] p-6 text-base relative"> 
               {renderTextWithAnnotations()}
               {showAnnotationToolbar && currentSelection && currentSelection.text.trim() !== "" && !isConnecting && (
                 <div
-                  className="absolute bg-card border border-border rounded-md shadow-lg p-1 flex flex-wrap gap-1 z-10" // z-10 to be above SVG lines
+                  className="absolute bg-card border border-border rounded-md shadow-lg p-1 flex flex-wrap gap-1 z-10" 
                   style={{
                     left: Math.max(0, toolbarPosition.x),
                     top: Math.max(0, toolbarPosition.y),
@@ -728,7 +736,7 @@ export default function ActiveReaderCore() {
                       <li key={key} className="flex items-start gap-2">
                          <div className="flex items-center shrink-0 mt-0.5">
                             <def.icon className={`h-4 w-4 shrink-0 ${def.colorClass.replace('bg-', 'text-').replace('/30', '-700').replace('/40', '-700')}`} />
-                            <span className={`w-3 h-3 rounded-sm shrink-0 ml-1 ${def.colorClass.replace('/30', '/80').replace('/40', '/80')}`}></span>
+                            {key !== 'connection' && <span className={`w-3 h-3 rounded-sm shrink-0 ml-1 ${def.colorClass.replace('/30', '/80').replace('/40', '/80')}`}></span>}
                          </div>
                         <div className="flex-grow">
                             <span className="font-medium">{def.label} ({def.abbreviation}):</span>
@@ -863,18 +871,19 @@ export default function ActiveReaderCore() {
                 </CardHeader>
                 <CardContent>
                   <ul className="space-y-3 max-h-60 overflow-y-auto">
-                    {connections.map(conn => {
+                    {connections.map((conn, index) => {
                       const def = annotationDefinitions.connection; 
+                      const connColor = connectionColors[index % connectionColors.length];
                       return (
-                        <li key={conn.id} className={`text-sm p-3 border rounded-md ${def.colorClass.replace('/30','/20').replace('/40','/20')} hover:shadow-md transition-shadow`}>
+                        <li key={conn.id} className={`text-sm p-3 border rounded-md hover:shadow-md transition-shadow`} style={{borderColor: connColor}}>
                           <div className="flex justify-between items-start">
                             <div className="flex-grow overflow-hidden space-y-1">
                                 <div className="flex items-center gap-1.5">
-                                    <span className={`font-semibold text-xs px-1.5 py-0.5 rounded-sm ${def.colorClass.replace('/30','/50')}`}>FROM:</span>
+                                    <span className={`font-semibold text-xs px-1.5 py-0.5 rounded-sm`} style={{backgroundColor: connColor, color: 'hsl(var(--primary-foreground))'}}>FROM:</span>
                                     <p className="italic text-xs">"{conn.from.text}"</p>
                                 </div>
                                 <div className="flex items-center gap-1.5">
-                                    <span className={`font-semibold text-xs px-1.5 py-0.5 rounded-sm ${def.colorClass.replace('/30','/50')}`}>TO:</span>
+                                    <span className={`font-semibold text-xs px-1.5 py-0.5 rounded-sm`} style={{backgroundColor: connColor, color: 'hsl(var(--primary-foreground))'}}>TO:</span>
                                     <p className="italic text-xs">"{conn.to.text}"</p>
                                 </div>
                             </div>
